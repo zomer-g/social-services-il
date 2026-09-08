@@ -156,3 +156,43 @@ adminRouter.get(
     });
   }),
 );
+
+/**
+ * Why a query matched what it matched.
+ *
+ * Search over Hebrew has several stages that can each quietly produce nothing —
+ * normalisation, tsquery construction, the index match, the trigram rescue — and
+ * from the outside they all look the same: no results. This shows each stage's
+ * output so the failing one is obvious.
+ */
+adminRouter.get(
+  '/explain',
+  handle(async (req, res) => {
+    const term = String(req.query['q'] ?? '');
+    const { rows } = await query(
+      `SELECT
+         $1::text                                AS input,
+         ssil_tokens($1)                         AS tokens,
+         ssil_normalize($1)                      AS normalized,
+         ssil_tsquery($1, true)::text            AS tsquery,
+         (ssil_tsquery($1, true) IS NULL)        AS tsquery_is_null,
+         (SELECT count(*)::int FROM cards WHERE search_doc @@ ssil_tsquery($1, true)) AS fts_matches,
+         (SELECT count(*)::int FROM cards WHERE search_text % ssil_normalize($1))     AS trigram_matches,
+         (SELECT count(*)::int FROM cards)       AS total_cards,
+         current_setting('pg_trgm.similarity_threshold', true) AS trigram_threshold`,
+      [term],
+    );
+
+    const sample = await query(
+      `SELECT card_id, service_name, left(search_text, 160) AS search_text,
+              ts_rank_cd(search_doc, ssil_tsquery($1, true), 32) AS text_rank,
+              similarity(search_text, ssil_normalize($1)) AS trgm
+         FROM cards
+        ORDER BY text_rank DESC NULLS LAST
+        LIMIT 5`,
+      [term],
+    );
+
+    res.json({ ...rows[0], sample: sample.rows });
+  }),
+);
