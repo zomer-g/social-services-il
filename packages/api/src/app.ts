@@ -5,7 +5,9 @@ import compression from 'compression';
 import cors from 'cors';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
+import { adminRouter } from './routes/admin.js';
 import { healthRouter } from './routes/health.js';
+import { v1Router } from './routes/v1.js';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -30,6 +32,8 @@ export function createApp(): Express {
   app.use('/api', cors({ origin: '*', methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
 
   app.use('/api', healthRouter);
+  app.use('/api/v1', v1Router);
+  app.use('/api/admin', adminRouter);
 
   const hasBuiltSpa = existsSync(join(PUBLIC_DIR, 'index.html'));
   if (hasBuiltSpa) {

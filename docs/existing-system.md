@@ -65,11 +65,15 @@ Field names below are exact, from `srm-etl/operators/derive/helpers.py`.
 
 Three axes; two drive the cards.
 
-| Axis | Root slug | Nodes |
-| --- | --- | --- |
-| Responses | `human_services` | 319 |
-| Situations | `human_situations` | 388 |
-| Places | `human_places` | 22 (unused) |
+| Axis | Root slug | Nodes (excluding the root) | Max depth |
+| --- | --- | --- | --- |
+| Responses | `human_services` | 189 | 4 |
+| Situations | `human_situations` | 217 | 3 |
+| Places | `human_places` | 21 | 3 (unused) |
+
+Counted from the vendored `taxonomy.tx.yaml`, which holds 430 slugs in total.
+Larger figures circulate for these axes; they come from the flattened CSV
+exports in the same repository, which emit one row per path rather than per node.
 
 Node shape: `name: {source: <English>, tx: {he: <Hebrew>}}`, `slug`, `items[]`,
 `pk`. Ids are the colon-delimited path, 2–4 levels deep, e.g.

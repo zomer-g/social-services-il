@@ -36,3 +36,4 @@ export interface SourceDefinition {
 export const AUTO_PUBLISH_TRUST_THRESHOLD = 70;
 
 export { loadTaxonomy, taxonomyIsEmpty, flattenTaxonomy } from './taxonomy.js';
+export { loadFixtures, clearFixtures, fixtureCardIds } from './fixtures.js';
