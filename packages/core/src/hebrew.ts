@@ -69,15 +69,29 @@ export function tokenize(text: string): string[] {
 }
 
 /**
- * The canonical search form of a free-text string: tokenised, folded, stripped
- * of stopwords and particles. Used both when building the index and when
- * parsing a query, so the two always agree.
+ * The canonical search form of a string: the tokens a document is indexed under
+ * and a query is matched against.
+ *
+ * Each token yields two forms — as written, and with one leading particle
+ * removed — because stripping is not reversible and we cannot tell a particle
+ * from a root letter. "מזון" and "למזון" would otherwise reduce to different
+ * tokens and never meet. Indexing both forms guarantees they overlap whichever
+ * way the word was written.
+ *
+ * The authoritative implementation is ssil_normalize() in the database; this
+ * mirrors it for client-side use, and the two are asserted equal in the tests.
  */
 export function normalizeForSearch(text: string): string[] {
-  return tokenize(text)
-    .filter((t) => !STOPWORDS.has(t))
-    .map((t) => stripPrefix(foldFinalForms(t)))
-    .filter((t) => t.length > 1);
+  const forms = new Set<string>();
+  for (const token of tokenize(text)) {
+    if (STOPWORDS.has(token)) continue;
+    const folded = foldFinalForms(token);
+    if (folded.length <= 1) continue;
+    forms.add(folded);
+    const stem = stripPrefix(folded);
+    if (stem.length > 1) forms.add(stem);
+  }
+  return [...forms];
 }
 
 /** Is this string predominantly Hebrew? Decides which analyzer path to take. */

@@ -22,6 +22,33 @@ export async function bootstrap(): Promise<void> {
     const { nodes, names } = await loadTaxonomy();
     console.log(`[info] taxonomy loaded: ${nodes} nodes, ${names} names`);
   }
+
+  await rebuildIfFlagged();
+}
+
+/**
+ * Rebuilds the card table when a migration has invalidated it.
+ *
+ * Runs here rather than inside the migration because the rebuild can take
+ * longer than the platform's 120-second health check, and a deploy that is
+ * otherwise fine should not roll back over it. The server is already serving
+ * the previous cards while this runs.
+ */
+async function rebuildIfFlagged(): Promise<void> {
+  const { rows } = await query<{ value: string }>(
+    `SELECT value FROM system_state WHERE key = 'cards_need_rebuild'`,
+  );
+  const reason = rows[0]?.value;
+  if (!reason) return;
+
+  console.log(`[info] rebuilding cards (${reason})`);
+  const started = Date.now();
+  const built = await query<{ rebuild_cards: number }>('SELECT rebuild_cards()');
+  await query('SELECT refresh_taxonomy_counts()');
+  await query(`DELETE FROM system_state WHERE key = 'cards_need_rebuild'`);
+  console.log(
+    `[info] rebuilt ${built.rows[0]?.rebuild_cards ?? 0} cards in ${Date.now() - started}ms`,
+  );
 }
 
 /** Row counts for the main tables, for the health endpoint and the admin. */
