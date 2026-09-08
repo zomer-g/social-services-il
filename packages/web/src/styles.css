@@ -138,6 +138,10 @@ a { color: var(--accent); }
   text-decoration: none;
   font-size: 1rem;
   margin-inline-end: auto;
+  /* 2.5.5: a standalone link in the header is a target, not inline text. */
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
 }
 .iconbtn {
   min-width: var(--tap);
@@ -398,7 +402,15 @@ a { color: var(--accent); }
   font-size: 0.85rem;
   color: var(--fg-muted);
 }
-.footer nav { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+/* Footer links are a navigation list rather than prose, so the inline
+   exception to 2.5.5 does not cover them. */
+.footer nav { display: flex; gap: 0.25rem 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+.footer nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 0.25rem;
+}
 
 .spinner {
   display: inline-block;
@@ -534,15 +546,19 @@ a { color: var(--accent); }
   line-height: 1.5;
 }
 .codeblock pre code { background: none; padding: 0; }
+/* 2.5.5: a copy button is a standalone control and gets a full target, even
+   though it sits over the corner of a code block. */
 .codeblock .copy {
   position: absolute;
-  top: 0.4rem;
-  inset-inline-end: 0.4rem;
+  top: 0.35rem;
+  inset-inline-end: 0.35rem;
   font: inherit;
-  font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 0 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--fg);
   cursor: pointer;
@@ -625,4 +641,12 @@ a { color: var(--accent); }
 
 @media (max-width: 30rem) {
   .params > div { grid-template-columns: 1fr; }
+}
+
+/* The language switcher: the label is the 44px target, so the select inside it
+   has to fill the label rather than sit as a small control within it. */
+.iconbtn select {
+  min-height: var(--tap);
+  width: 100%;
+  cursor: pointer;
 }
