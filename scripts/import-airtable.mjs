@@ -53,6 +53,8 @@ const DRY = flag('dry-run');
 const LIMIT = Number(opt('limit', '0')) || 0;
 const OUT = opt('out', '');
 const REPORT = opt('report', '');
+/** Resume point, in services. Upserts are idempotent, so re-running is safe. */
+const START = Number(opt('start', '0')) || 0;
 const DO_TAXONOMY = flag('taxonomy');
 const DO_SERVICES = flag('services') || !DO_TAXONOMY;
 
@@ -64,6 +66,38 @@ const DO_SERVICES = flag('services') || !DO_TAXONOMY;
  */
 const MAX_SERVICES_PER_BATCH = 100;
 const MAX_BRANCHES_PER_BATCH = 1500;
+const MAX_ATTEMPTS = 4;
+
+/**
+ * Posts one batch, retrying on a dropped connection.
+ *
+ * A long import is a long-lived keep-alive conversation, and the far side will
+ * eventually close one: over a full run the server closed a socket after about
+ * five megabytes. Since every write is an idempotent upsert, retrying the same
+ * batch is safe and far cheaper than losing the run.
+ */
+async function postBatch(url, headers, body) {
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        // A fresh connection each time, rather than reusing one the server may
+        // already have decided to close.
+        keepalive: false,
+      });
+      return { res, body: await res.json().catch(() => null) };
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      }
+    }
+  }
+  throw lastError;
+}
 
 /* ------------------------------------------------------------------ parsing */
 
@@ -433,8 +467,9 @@ function* batches(services) {
 }
 
 async function importServices(tables) {
-  const { services, skipped } = convertServices(tables);
-  const branchTotal = services.reduce((n, s) => n + s.branches.length, 0);
+  const { services: allServices, skipped } = convertServices(tables);
+  const services = START ? allServices.slice(START) : allServices;
+  const branchTotal = allServices.reduce((n, s) => n + s.branches.length, 0);
   console.log(
     `\n  ${services.length} services converted (${branchTotal} service-branch pairs)\n` +
       `  skipped: ${skipped.inactive} inactive, ${skipped.no_response} with no response tag, ` +
@@ -459,12 +494,11 @@ async function importServices(tables) {
 
   for (const batch of batches(services)) {
     n += 1;
-    const res = await fetch(`${BASE}/api/v1/ingest/services`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
-      body: JSON.stringify({ dry_run: DRY, services: batch }),
-    });
-    const body = await res.json().catch(() => null);
+    const { res, body } = await postBatch(
+      `${BASE}/api/v1/ingest/services`,
+      { 'content-type': 'application/json', authorization: `Bearer ${KEY}`, connection: 'close' },
+      JSON.stringify({ dry_run: DRY, services: batch }),
+    );
 
     if (!res.ok && !body?.results) {
       console.error(`  batch ${n}: HTTP ${res.status} ${JSON.stringify(body).slice(0, 300)}`);

@@ -7,6 +7,15 @@ import { query } from './pool.js';
  * these are not independent: the facet counts have to describe the same result
  * set the page is showing, and a second round trip to compute them is both
  * slower and a chance for the two to disagree.
+ *
+ * The WHERE clause is assembled in JavaScript rather than written once with
+ * `$1 IS NULL OR ...` guards. That idiom keeps the statement text constant, but
+ * it also hides from the planner which filters are actually present, so an
+ * indexable condition ends up inside an OR that can never use an index. On the
+ * real corpus that turned every free-text search into a sequential scan
+ * computing trigram similarity over every row — about 1.4 seconds, against tens
+ * of milliseconds off the index. There are only a handful of distinct shapes, so
+ * the planner now gets a fair description of each.
  */
 
 export interface SearchParams {
@@ -81,101 +90,125 @@ const DEFAULT_LIMIT = 20;
 /** Distance at which the proximity term has fallen to half. */
 const PROXIMITY_HALF_LIFE_KM = 5;
 
+type MatchMode = 'none' | 'exact' | 'fuzzy';
+
 export async function searchCards(params: SearchParams): Promise<SearchResponse> {
+  const q = params.q?.trim() || undefined;
+
+  // The index match is the fast path and answers almost everything. Trigram
+  // similarity is the rescue for a misspelling, and it cannot share the index
+  // with the full-text match, so it runs only when the exact pass found nothing
+  // — which is precisely when someone needs it.
+  const exact = await run(params, q ? 'exact' : 'none');
+  if (q && exact.total === 0) {
+    const fuzzy = await run(params, 'fuzzy');
+    if (fuzzy.total > 0) return fuzzy;
+  }
+  return exact;
+}
+
+async function run(params: SearchParams, mode: MatchMode): Promise<SearchResponse> {
   const limit = Math.min(Math.max(params.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const offset = Math.max(params.offset ?? 0, 0);
   const collapse = params.collapse !== false;
   const lang = params.lang ?? 'he';
-
   const hasPoint = typeof params.lat === 'number' && typeof params.lon === 'number';
-  const q = params.q?.trim() || null;
+  const q = params.q?.trim() || undefined;
 
-  // Parameters are positional so the statement text stays constant across
-  // calls and Postgres can reuse its plan.
-  const args: unknown[] = [
-    q, // $1
-    params.responses?.length ? params.responses : null, // $2
-    params.situations?.length ? params.situations : null, // $3
-    hasPoint ? params.lon : null, // $4
-    hasPoint ? params.lat : null, // $5
-    params.radiusKm != null ? params.radiusKm * 1000 : null, // $6
-    params.bbox ?? null, // $7
-    params.city ?? null, // $8
-    params.organizationId ?? null, // $9
-    params.nationalService ?? null, // $10
-    limit, // $11
-    offset, // $12
-    lang, // $13
-  ];
+  const args: unknown[] = [];
+  const p = (value: unknown): string => {
+    args.push(value);
+    return `$${args.length}`;
+  };
+
+  const where: string[] = [];
+  let textRank = 'NULL::float4';
+  let trgm = 'NULL::float4';
+
+  if (mode !== 'none' && q) {
+    const term = p(q);
+    if (mode === 'exact') {
+      // Written against the column directly, so the GIN index applies.
+      where.push(`c.search_doc @@ ssil_tsquery(${term}, true)`);
+      textRank = `ts_rank_cd(c.search_doc, ssil_tsquery(${term}, true), 32)`;
+    } else {
+      where.push(`c.search_text % ssil_normalize(${term})`);
+      trgm = `similarity(c.search_text, ssil_normalize(${term}))`;
+    }
+  }
+
+  if (params.responses?.length) where.push(`c.response_ids_all && ${p(params.responses)}::text[]`);
+  if (params.situations?.length) where.push(`c.situation_ids_all && ${p(params.situations)}::text[]`);
+  if (params.city) where.push(`c.city = ${p(params.city)}`);
+  if (params.organizationId) where.push(`c.organization_id = ${p(params.organizationId)}`);
+  if (params.nationalService === 'only') where.push('c.national_service');
+  if (params.nationalService === 'exclude') where.push('NOT c.national_service');
+
+  let origin = 'NULL::geography';
+  if (hasPoint) {
+    origin = `ST_SetSRID(ST_MakePoint(${p(params.lon)}::float8, ${p(params.lat)}::float8), 4326)::geography`;
+  }
+
+  // A radius or a viewport must not hide nationwide services: they are
+  // available at that location too, they just have no pin.
+  if (hasPoint && params.radiusKm != null) {
+    where.push(
+      `(c.national_service OR (c.geom IS NOT NULL AND ST_DWithin(c.geom, ${origin}, ${p(params.radiusKm * 1000)}::float8)))`,
+    );
+  }
+  if (params.bbox) {
+    const [w, s, e, n] = params.bbox;
+    where.push(
+      `(c.national_service OR (c.geom IS NOT NULL AND ST_Intersects(c.geom::geometry, ` +
+        `ST_MakeEnvelope(${p(w)}::float8, ${p(s)}::float8, ${p(e)}::float8, ${p(n)}::float8, 4326))))`,
+    );
+  }
+
+  const distance = hasPoint
+    ? `CASE WHEN c.geom IS NOT NULL THEN ST_Distance(c.geom, ${origin}) END`
+    : 'NULL::float8';
+  const proximity = hasPoint
+    ? `CASE
+         WHEN f.distance_m IS NOT NULL THEN 3.0 / (1 + (f.distance_m / 1000.0) / ${PROXIMITY_HALF_LIFE_KM})
+         -- A nationwide service is reachable from anywhere, so it sits where a
+         -- moderately near branch would rather than below everything with a pin.
+         WHEN f.national_service THEN 1.2
+         ELSE 0
+       END`
+    : '0';
+
+  const langParam = p(lang);
+  const limitParam = p(limit);
+  const offsetParam = p(offset);
 
   const sql = `
-    WITH q AS (
-      SELECT
-        CASE WHEN $1::text IS NOT NULL THEN ssil_tsquery($1::text, true) END AS tsq,
-        CASE WHEN $1::text IS NOT NULL THEN ssil_normalize($1::text) END AS qnorm,
-        CASE WHEN $4::float8 IS NOT NULL
-             THEN ST_SetSRID(ST_MakePoint($4::float8, $5::float8), 4326)::geography
-        END AS origin
-    ),
-    filtered AS (
+    WITH filtered AS (
       SELECT c.*,
-        (q.origin IS NOT NULL) AS has_origin,
-        CASE WHEN q.origin IS NOT NULL AND c.geom IS NOT NULL
-             THEN ST_Distance(c.geom, q.origin) END AS distance_m,
-        CASE WHEN q.tsq IS NOT NULL
-             THEN ts_rank_cd(c.search_doc, q.tsq, 32) END AS text_rank,
-        CASE WHEN q.qnorm IS NOT NULL
-             THEN similarity(c.search_text, q.qnorm) END AS trgm
-      FROM cards c, q
-      WHERE
-        -- Free text: the index match is the gate; trigram similarity only
-        -- rescues a near miss, so a typo still finds the record.
-        (q.tsq IS NULL OR c.search_doc @@ q.tsq OR c.search_text % q.qnorm)
-        AND ($2::text[] IS NULL OR c.response_ids_all && $2::text[])
-        AND ($3::text[] IS NULL OR c.situation_ids_all && $3::text[])
-        AND ($8::text IS NULL OR c.city = $8::text)
-        AND ($9::text IS NULL OR c.organization_id = $9::text)
-        AND ($10::text IS NULL
-             OR ($10 = 'only' AND c.national_service)
-             OR ($10 = 'exclude' AND NOT c.national_service))
-        -- A radius or a viewport must not hide nationwide services: they are
-        -- available at that location too, they just have no pin.
-        AND ($6::float8 IS NULL OR c.national_service
-             OR (c.geom IS NOT NULL AND ST_DWithin(c.geom, q.origin, $6::float8)))
-        AND ($7::float8[] IS NULL OR c.national_service
-             OR (c.geom IS NOT NULL AND ST_Intersects(
-                   c.geom::geometry,
-                   ST_MakeEnvelope(
-                     ($7::float8[])[1], ($7::float8[])[2],
-                     ($7::float8[])[3], ($7::float8[])[4], 4326))))
+        ${distance} AS distance_m,
+        ${textRank} AS text_rank,
+        ${trgm} AS trgm
+      FROM cards c
+      ${where.length ? `WHERE ${where.join('\n        AND ')}` : ''}
     ),
     ranked AS (
       SELECT f.*,
-        -- Three additive terms, each on its own 0..1-ish scale, so the weights
-        -- mean something: how well the words match, how substantial the service
-        -- is, and how close it is.
+        -- Three additive terms on comparable scales, so the weights mean
+        -- something: how well the words match, how substantial the service is,
+        -- and how close it is.
         COALESCE(f.text_rank, 0) * 6
           + COALESCE(f.trgm, 0) * 2
           + ln(1 + f.score) * 0.5
-          + CASE
-              WHEN f.distance_m IS NOT NULL
-                THEN 3.0 / (1 + (f.distance_m / 1000.0) / ${PROXIMITY_HALF_LIFE_KM})
-              -- A nationwide service is reachable from anywhere, so it sits at
-              -- the value a moderately near branch would score rather than
-              -- being pushed below everything with a pin.
-              WHEN f.national_service AND f.has_origin THEN 1.2
-              ELSE 0
-            END AS rank
+          + ${proximity} AS rank
       FROM filtered f
     ),
     grouped AS (
       SELECT r.*,
-        CASE WHEN $14::boolean
-             THEN row_number() OVER (PARTITION BY r.collapse_key ORDER BY r.rank DESC, r.score DESC)
-             ELSE 1 END AS dup_rank,
-        CASE WHEN $14::boolean
-             THEN count(*) OVER (PARTITION BY r.collapse_key)
-             ELSE 1 END AS dup_count
+        ${
+          collapse
+            ? `row_number() OVER (PARTITION BY r.collapse_key ORDER BY r.rank DESC, r.score DESC) AS dup_rank,
+             count(*) OVER (PARTITION BY r.collapse_key) AS dup_count`
+            : '1::bigint AS dup_rank, 1::bigint AS dup_count'
+        }
       FROM ranked r
     ),
     visible AS (
@@ -186,7 +219,7 @@ export async function searchCards(params: SearchParams): Promise<SearchResponse>
       -- The rank column orders the page but is dropped from the payload: it is
       -- an internal blend, and publishing it would imply a stable meaning it
       -- does not have across queries.
-      (SELECT json_agg(to_jsonb(p) - 'rank' ORDER BY p.rank DESC, p.score DESC, p.card_id)
+      (SELECT json_agg(to_jsonb(page) - 'rank' ORDER BY page.rank DESC, page.score DESC, page.card_id)
        FROM (
          SELECT v.card_id, v.service_id, v.branch_id, v.organization_id,
                 v.service_name, v.service_description,
@@ -200,20 +233,20 @@ export async function searchCards(params: SearchParams): Promise<SearchResponse>
                 v.updated_at, v.rank
          FROM visible v
          ORDER BY v.rank DESC, v.score DESC, v.card_id
-         LIMIT $11 OFFSET $12
-       ) p) AS cards,
+         LIMIT ${limitParam} OFFSET ${offsetParam}
+       ) page) AS cards,
       -- Facets describe the whole filtered set, not the page, so the counts
       -- still make sense on page four.
       (SELECT json_agg(b) FROM (
          SELECT node AS id, tn.name, count(*)::int AS count
          FROM visible v, unnest(v.response_ids_all) AS node
-         LEFT JOIN taxonomy_names tn ON tn.node_id = node AND tn.lang = $13::text
+         LEFT JOIN taxonomy_names tn ON tn.node_id = node AND tn.lang = ${langParam}
          GROUP BY node, tn.name ORDER BY count(*) DESC LIMIT 40
        ) b) AS response_facets,
       (SELECT json_agg(b) FROM (
          SELECT node AS id, tn.name, count(*)::int AS count
          FROM visible v, unnest(v.situation_ids_all) AS node
-         LEFT JOIN taxonomy_names tn ON tn.node_id = node AND tn.lang = $13::text
+         LEFT JOIN taxonomy_names tn ON tn.node_id = node AND tn.lang = ${langParam}
          GROUP BY node, tn.name ORDER BY count(*) DESC LIMIT 40
        ) b) AS situation_facets,
       (SELECT json_agg(b) FROM (
@@ -222,8 +255,6 @@ export async function searchCards(params: SearchParams): Promise<SearchResponse>
          GROUP BY v.city ORDER BY count(*) DESC LIMIT 30
        ) b) AS city_facets
   `;
-
-  args.push(collapse); // $14
 
   const { rows } = await query<{
     total: number;
