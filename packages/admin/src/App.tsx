@@ -14,7 +14,7 @@ import './admin.css';
  * it is typed in here rather than stored, so it never sits in browser storage.
  */
 
-const TABS = ['overview', 'review', 'reports', 'sources', 'keys', 'people', 'diagnostics'] as const;
+const TABS = ['overview', 'review', 'reports', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -22,6 +22,7 @@ const TAB_LABELS: Record<Tab, string> = {
   review: 'ממתין לאישור',
   reports: 'דיווחי טעויות',
   sources: 'מקורות',
+  mcp: 'שרתי MCP',
   keys: 'מפתחות API',
   people: 'משתמשים',
   diagnostics: 'אבחון',
@@ -94,6 +95,7 @@ export function App() {
         {tab === 'review' && <Review />}
         {tab === 'reports' && <Reports />}
         {tab === 'sources' && <Sources />}
+        {tab === 'mcp' && <McpServers />}
         {tab === 'keys' && <Keys />}
         {tab === 'people' && <People />}
         {tab === 'diagnostics' && <Diagnostics />}
@@ -693,6 +695,170 @@ function Diagnostics() {
         </button>
       </form>
       {explained && <pre className="explain">{JSON.stringify(explained, null, 2)}</pre>}
+    </>
+  );
+}
+
+/**
+ * The MCP servers the site's own search can reach.
+ *
+ * This is the screen that makes adding a data source a configuration change
+ * rather than a deploy: an MCP server describes its own tools, so a URL and a
+ * credential are the whole integration.
+ */
+function McpServers() {
+  const { data, error, reload } = useLoad<{ servers: Record<string, string | number | boolean | null>[] }>(
+    '/api/admin/mcp-servers',
+  );
+  const [form, setForm] = useState({ slug: '', name: '', url: '', description: '', auth_header: '' });
+  const [message, setMessage] = useState<string | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, { ok: boolean; tools: string[]; error?: string }>>({});
+
+  const test = async (id: string) => {
+    setTesting(id);
+    try {
+      const r = await api<{ ok: boolean; tools: string[]; error?: string }>(
+        `/api/admin/mcp-servers/${id}/test`,
+        { method: 'POST' },
+      );
+      setResults((current) => ({ ...current, [id]: r }));
+      reload();
+    } finally {
+      setTesting(null);
+    }
+  };
+
+  const add = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api('/api/admin/mcp-servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...form,
+          // An empty box means "leave the stored credential alone", not "clear it".
+          auth_header: form.auth_header.trim() || undefined,
+          enabled: false,
+        }),
+      });
+      setForm({ slug: '', name: '', url: '', description: '', auth_header: '' });
+      setMessage('נוסף. מומלץ לבדוק חיבור לפני הפעלה.');
+      reload();
+    } catch (err) {
+      setMessage((err as Error).message);
+    }
+  };
+
+  if (error) return <p className="error">{error}</p>;
+
+  return (
+    <>
+      <h1>שרתי MCP</h1>
+      <p className="muted">
+        כל שרת רשום כאן הופך למקור שהחיפוש באתר יכול לתשאל. שרת MCP מתאר את הכלים של עצמו, ולכן
+        כתובת ומפתח הם כל האינטגרציה — בלי לכתוב קוד ובלי פריסה מחדש.
+      </p>
+      <p className="muted">
+        כפתור "חיפוש בכל המקורות" באתר מופיע רק כששני שרתים או יותר מופעלים. עם מקור אחד הוא היה
+        משכפל את החיפוש החכם.
+      </p>
+
+      <form className="inline" onSubmit={add}>
+        <input placeholder="slug (אותיות קטנות)" value={form.slug}
+          onChange={(e) => setForm({ ...form, slug: e.target.value })} required />
+        <input placeholder="שם לתצוגה" value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+        <input placeholder="https://.../mcp" value={form.url} dir="ltr"
+          onChange={(e) => setForm({ ...form, url: e.target.value })} required />
+        <input placeholder="Authorization (אופציונלי)" value={form.auth_header} dir="ltr"
+          onChange={(e) => setForm({ ...form, auth_header: e.target.value })} />
+        <button type="submit" className="btn">הוספה</button>
+      </form>
+      {message && <p className="banner">{message}</p>}
+
+      {!data ? (
+        <p className="muted">טוען…</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>שרת</th>
+              <th>מצב</th>
+              <th>בדיקה אחרונה</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.servers.map((server) => {
+              const id = String(server['id']);
+              const result = results[id];
+              return (
+                <tr key={id} className={server['enabled'] ? '' : 'revoked'}>
+                  <td>
+                    <strong>{String(server['name'])}</strong>
+                    <br />
+                    <code dir="ltr">{String(server['url'])}</code>
+                    {server['description'] && (
+                      <>
+                        <br />
+                        <span className="muted">{String(server['description']).slice(0, 120)}</span>
+                      </>
+                    )}
+                  </td>
+                  <td>
+                    {server['enabled'] ? 'מופעל' : 'כבוי'}
+                    {server['is_self'] ? ' · המאגר של האתר' : ''}
+                    {server['has_credential'] ? ' · עם מפתח' : ''}
+                  </td>
+                  <td>
+                    {server['last_checked_at'] ? (
+                      <>
+                        {new Date(String(server['last_checked_at'])).toLocaleString('he-IL')}
+                        <br />
+                        {server['last_status'] === 'ok' ? (
+                          <span>תקין · {String(server['tool_count'])} כלים</span>
+                        ) : (
+                          <span className="error">{String(server['last_status']).slice(0, 90)}</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="muted">לא נבדק</span>
+                    )}
+                    {result?.ok && (
+                      <>
+                        <br />
+                        <span className="muted">{result.tools.join(', ')}</span>
+                      </>
+                    )}
+                  </td>
+                  <td className="rowactions">
+                    <button type="button" className="btn small secondary"
+                      onClick={() => test(id)} disabled={testing === id}>
+                      {testing === id ? 'בודק…' : 'בדיקת חיבור'}
+                    </button>
+                    <button type="button" className="btn small secondary"
+                      onClick={async () => {
+                        await api(`/api/admin/mcp-servers/${id}/toggle`, { method: 'POST' });
+                        reload();
+                      }}>
+                      {server['enabled'] ? 'כיבוי' : 'הפעלה'}
+                    </button>
+                    {!server['is_self'] && (
+                      <button type="button" className="btn small secondary"
+                        onClick={async () => {
+                          await api(`/api/admin/mcp-servers/${id}`, { method: 'DELETE' });
+                          reload();
+                        }}>
+                        מחיקה
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </>
   );
 }
