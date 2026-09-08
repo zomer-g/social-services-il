@@ -26,7 +26,7 @@ export interface SourceDefinition {
   /** Cron expression; null means the source is only pushed to, never pulled. */
   schedule: string | null;
   /**
-   * 0–100. Above the auto-publish threshold a source writes straight to
+   * 0-100. Above the auto-publish threshold a source writes straight to
    * `published`; below it, everything lands in the moderation queue.
    */
   trustLevel: number;
@@ -34,3 +34,5 @@ export interface SourceDefinition {
 }
 
 export const AUTO_PUBLISH_TRUST_THRESHOLD = 70;
+
+export { loadTaxonomy, taxonomyIsEmpty, flattenTaxonomy } from './taxonomy.js';

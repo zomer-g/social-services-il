@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { bootstrap } from './bootstrap.js';
 import { config } from './config.js';
 
 const app = createApp();
@@ -7,6 +8,12 @@ const app = createApp();
 // listening on localhost alone fails the deploy.
 const server = app.listen(config.port, '0.0.0.0', () => {
   console.log(`[info] listening on 0.0.0.0:${config.port} (${config.env})`);
+});
+
+// Seeding runs after the socket is open, so a slow first load cannot make the
+// platform's 120-second health check time out and roll the deploy back.
+bootstrap().catch((err: Error) => {
+  console.error('[error] bootstrap failed:', err.stack ?? err.message);
 });
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
