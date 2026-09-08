@@ -27,6 +27,15 @@ interface Strings {
   askPrompt: string;
   searchPlaceholder: string;
   searchAction: string;
+  smartAction: string;
+  smartHint: string;
+  smartThinking: string;
+  smartUnderstood: string;
+  smartNoKey: string;
+  smartError: string;
+  smartBackToPlain: string;
+  a11yTitle: string;
+  a11yLink: string;
   nearMe: string;
   nearMeWorking: string;
   locationDenied: string;
@@ -104,6 +113,15 @@ const he: Strings = {
   askPrompt: 'במה אפשר לעזור?',
   searchPlaceholder: 'לדוגמה: אין לי כסף לאוכל',
   searchAction: 'חיפוש',
+  smartAction: 'חיפוש חכם',
+  smartHint: 'אפשר לכתוב במילים שלכם — למשל "אין לי כסף לאוכל ואני בתל אביב" — והחיפוש החכם יבין למה הכוונה.',
+  smartThinking: 'מחפש עבורכם…',
+  smartUnderstood: 'מה הבנו מהבקשה',
+  smartNoKey: 'החיפוש החכם אינו זמין כרגע. החיפוש הרגיל עובד כרגיל.',
+  smartError: 'משהו השתבש בחיפוש החכם. אפשר לנסות את החיפוש הרגיל.',
+  smartBackToPlain: 'לחיפוש הרגיל',
+  a11yTitle: 'הצהרת נגישות',
+  a11yLink: 'נגישות',
   nearMe: 'לפי המיקום שלי',
   nearMeWorking: 'מאתר את המיקום…',
   locationDenied: 'לא הצלחנו לאתר את המיקום. אפשר לבחור עיר במקום.',
@@ -182,6 +200,15 @@ const ar: Strings = {
   askPrompt: 'كيف يمكننا المساعدة؟',
   searchPlaceholder: 'مثال: ليس لدي مال للطعام',
   searchAction: 'بحث',
+  smartAction: 'بحث ذكي',
+  smartHint: 'اكتبوا بكلماتكم — مثلاً "ليس لدي مال للطعام وأنا في تل أبيب" — والبحث الذكي سيفهم المقصود.',
+  smartThinking: 'نبحث لكم…',
+  smartUnderstood: 'ما فهمناه من طلبكم',
+  smartNoKey: 'البحث الذكي غير متاح حالياً. البحث العادي يعمل كالمعتاد.',
+  smartError: 'حدث خطأ في البحث الذكي. يمكنكم تجربة البحث العادي.',
+  smartBackToPlain: 'إلى البحث العادي',
+  a11yTitle: 'بيان إمكانية الوصول',
+  a11yLink: 'إمكانية الوصول',
   nearMe: 'حسب موقعي',
   nearMeWorking: 'جارٍ تحديد الموقع…',
   locationDenied: 'تعذّر تحديد الموقع. يمكنك اختيار مدينة بدلاً من ذلك.',
@@ -260,6 +287,15 @@ const ru: Strings = {
   askPrompt: 'Чем помочь?',
   searchPlaceholder: 'Например: нет денег на еду',
   searchAction: 'Найти',
+  smartAction: 'Умный поиск',
+  smartHint: 'Можно написать своими словами — например «нет денег на еду, я в Тель-Авиве» — и умный поиск поймёт.',
+  smartThinking: 'Ищем для вас…',
+  smartUnderstood: 'Как мы поняли запрос',
+  smartNoKey: 'Умный поиск сейчас недоступен. Обычный поиск работает.',
+  smartError: 'Умный поиск не сработал. Попробуйте обычный поиск.',
+  smartBackToPlain: 'К обычному поиску',
+  a11yTitle: 'Заявление о доступности',
+  a11yLink: 'Доступность',
   nearMe: 'Рядом со мной',
   nearMeWorking: 'Определяем местоположение…',
   locationDenied: 'Не удалось определить местоположение. Можно выбрать город.',
@@ -338,6 +374,15 @@ const en: Strings = {
   askPrompt: 'What do you need?',
   searchPlaceholder: 'For example: I have no money for food',
   searchAction: 'Search',
+  smartAction: 'Smart search',
+  smartHint: 'You can write in your own words — "I have no money for food and I am in Tel Aviv" — and smart search will work out what you mean.',
+  smartThinking: 'Searching for you…',
+  smartUnderstood: 'What we understood',
+  smartNoKey: 'Smart search is not available right now. Ordinary search works as usual.',
+  smartError: 'Smart search did not work. Please try the ordinary search.',
+  smartBackToPlain: 'Back to ordinary search',
+  a11yTitle: 'Accessibility statement',
+  a11yLink: 'Accessibility',
   nearMe: 'Near me',
   nearMeWorking: 'Finding your location…',
   locationDenied: 'We could not find your location. You can pick a city instead.',

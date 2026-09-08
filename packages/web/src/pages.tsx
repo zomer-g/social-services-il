@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { autocomplete, getCard, reportError, search, type Card, type CardDetail, type Suggestion } from './api.js';
 import { ActionCard, UrgentBar, useGeolocation, useSaved } from './components.js';
+import { useSmartAvailable } from './smart.js';
 import { stringsFor, type Lang } from './i18n.js';
 
 const PAGE_SIZE = 20;
@@ -28,6 +29,8 @@ export function HomePage({ lang }: { lang: Lang }) {
   const [term, setTerm] = useState('');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const geo = useGeolocation();
+  // Hidden rather than shown-and-broken when the server has no key for it.
+  const smartAvailable = useSmartAvailable();
 
   // Suggestions are advisory: typing and pressing enter always works, so a slow
   // or failed lookup never blocks the search.
@@ -73,19 +76,44 @@ export function HomePage({ lang }: { lang: Lang }) {
             if (term.trim()) go({ q: term.trim() });
           }}
         >
+          <label htmlFor="q" className="visually-hidden">
+            {t.searchPlaceholder}
+          </label>
           <input
+            id="q"
             type="search"
             value={term}
             onChange={(e) => setTerm(e.target.value)}
             placeholder={t.searchPlaceholder}
-            aria-label={t.searchPlaceholder}
             autoComplete="off"
             enterKeyHint="search"
+            aria-describedby={smartAvailable ? 'smart-hint' : undefined}
           />
           <button type="submit" className="btn">
             {t.searchAction}
           </button>
+          {/* Same typed text, a second way to use it. The plain search stays the
+              primary action and always works; smart search is the alternative
+              for someone who does not know what the thing they need is called. */}
+          {smartAvailable && (
+            <button
+              type="button"
+              className="btn secondary smart"
+              onClick={() => {
+                if (!term.trim()) return;
+                const params = new URLSearchParams({ q: term.trim(), lang });
+                navigate(`/smart?${params}`);
+              }}
+            >
+              <span aria-hidden="true">✨</span> {t.smartAction}
+            </button>
+          )}
         </form>
+        {smartAvailable && (
+          <p id="smart-hint" className="hint">
+            {t.smartHint}
+          </p>
+        )}
 
         {suggestions.length > 0 && (
           <ul className="suggestions">

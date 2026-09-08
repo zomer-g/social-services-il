@@ -21,7 +21,8 @@
     "migrate": "node packages/db/dist/migrate.js",
     "typecheck": "tsc -b --pretty",
     "test": "node --test packages/*/dist/**/*.test.js",
-    "openapi": "node scripts/dump-openapi.mjs"
+    "openapi": "node scripts/dump-openapi.mjs",
+    "check:contrast": "node scripts/check-contrast.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",

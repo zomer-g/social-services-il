@@ -10,6 +10,7 @@ import { openapi } from './openapi.js';
 import { authRouter } from './auth.js';
 import { adminRouter } from './routes/admin.js';
 import { ingestRouter } from './routes/ingest.js';
+import { smartRouter } from './routes/smart.js';
 import { healthRouter } from './routes/health.js';
 import { v1Router } from './routes/v1.js';
 
@@ -43,6 +44,7 @@ export function createApp(): Express {
 
   app.use('/api', healthRouter);
   app.use('/api/v1', v1Router);
+  app.use('/api/v1', smartRouter);
   app.use('/api/v1/ingest', ingestRouter);
   app.use('/api/auth', authRouter);
   app.use('/api/admin', adminRouter);

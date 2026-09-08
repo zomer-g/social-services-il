@@ -14,12 +14,16 @@
   --surface: #ffffff;
   --surface-2: #eef1f7;
   --fg: #14161c;
-  --fg-muted: #565d6d;
+  /* Solved for 7:1 against the page, cards and inset panels alike. */
+  --fg-muted: #4b515f;
+  /* Decorative separators. */
   --border: #d9dee8;
+  /* Borders that outline a control a person must find: 3:1 minimum (1.4.11). */
+  --border-strong: #8d9097;
   --accent: #17418f;
   --accent-fg: #ffffff;
   --accent-soft: #e7edfb;
-  --urgent: #a3231d;
+  --urgent: #99211b;
   --urgent-soft: #fdeceb;
   --ok: #1c6b45;
   --focus: #0b63d6;
@@ -38,8 +42,9 @@
     --surface: #171a22;
     --surface-2: #1f232d;
     --fg: #eef0f6;
-    --fg-muted: #a3abbd;
+    --fg-muted: #a6aebf;
     --border: #2c3140;
+    --border-strong: #636772;
     --accent: #9db8ff;
     --accent-fg: #0e1016;
     --accent-soft: #1c2740;
@@ -62,8 +67,20 @@ body {
   /* 17px rather than 16: this text is read under stress and sometimes at
      arm's length. */
   font-size: 17px;
-  line-height: 1.55;
+  /* 1.4.8 wants at least 1.5 within a paragraph. */
+  line-height: 1.6;
+  /* 1.4.8 also rules out justified text: the rivers it opens up are hard work
+     for readers with dyslexia, and Hebrew justifies worse than most. */
+  text-align: start;
 }
+
+/* 1.4.8: paragraph spacing at least 1.5x the line height, and a measure that
+   does not run much past 80 characters. */
+p, li, dd {
+  margin-block-end: 1.6em;
+  max-width: 72ch;
+}
+p:last-child { margin-block-end: 0; }
 
 h1, h2, h3 { line-height: 1.25; margin: 0 0 0.5rem; }
 h1 { font-size: 1.6rem; }
@@ -129,7 +146,7 @@ a { color: var(--accent); }
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--fg);
   border-radius: var(--radius);
@@ -163,7 +180,7 @@ a { color: var(--accent); }
   font: inherit;
   color: var(--fg);
   background: var(--surface);
-  border: 2px solid var(--border);
+  border: 2px solid var(--border-strong);
   border-radius: var(--radius);
 }
 .searchform input:focus { border-color: var(--accent); }
@@ -184,7 +201,7 @@ a { color: var(--accent); }
   gap: 0.4rem;
   text-decoration: none;
 }
-.btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--border); }
+.btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--border-strong); }
 .btn.block { width: 100%; }
 .btn:disabled { opacity: 0.6; cursor: progress; }
 
@@ -193,7 +210,7 @@ a { color: var(--accent); }
   list-style: none;
   margin: -0.5rem 0 1rem;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
   overflow: hidden;
@@ -228,7 +245,7 @@ a { color: var(--accent); }
 .need {
   min-height: 92px;
   border-radius: var(--radius);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   color: inherit;
   text-decoration: none;
@@ -273,10 +290,11 @@ a { color: var(--accent); }
 
 .chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
 .chip {
-  min-height: 40px;
-  padding: 0 0.75rem;
+  /* 2.5.5 asks for 44px; chips wrap, so height is the binding constraint. */
+  min-height: var(--tap);
+  padding: 0 0.9rem;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--surface);
   color: inherit;
   font: inherit;
@@ -404,8 +422,12 @@ a { color: var(--accent); }
 }
 
 @media (prefers-contrast: more) {
-  :root { --border: currentColor; --fg-muted: var(--fg); }
+  :root { --border: currentColor; --border-strong: currentColor; --fg-muted: var(--fg); }
 }
+
+/* 1.4.12: a reader who overrides text spacing must not lose content. Nothing
+   here has a fixed height text can overflow, and this makes that explicit. */
+.card, .need, .chip, .btn, .endpoint { overflow-wrap: anywhere; }
 
 .visually-hidden {
   position: absolute;
@@ -448,9 +470,11 @@ a { color: var(--accent); }
 
 /* ---------- developer documentation ---------- */
 
-/* Forced left-to-right regardless of interface language: this page is mostly
-   URLs, JSON and shell commands, which read wrongly in an RTL context. */
+/* Hebrew prose with left-to-right islands: individual code spans, URLs and
+   command blocks carry dir="ltr" themselves rather than the page flipping. */
 .devdocs { max-width: 100%; }
+.devdocs .lede { color: var(--fg-muted); font-size: 1.05rem; }
+.devdocs code { unicode-bidi: isolate; }
 .devdocs .version { color: var(--fg-muted); margin-top: -0.5rem; }
 .devdocs h2 { margin-top: 2rem; }
 .devdocs code {
@@ -522,4 +546,83 @@ a { color: var(--accent); }
   background: var(--surface);
   color: var(--fg);
   cursor: pointer;
+}
+
+/* Smart search sits beside the plain one and reads as the secondary action:
+   the ordinary box must stay the obvious thing to press. */
+.searchform { flex-wrap: wrap; }
+.searchform .btn.smart { flex: 1 1 100%; }
+.hint {
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  margin: -0.5rem 0 1rem;
+}
+.quoted { font-weight: 400; }
+.lead { font-size: 1.05rem; }
+
+/* The MCP server URL is the single most copied thing on the page, so it gets
+   its own card rather than sitting in the prose. */
+.mcpcard {
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin: 1rem 0 1.5rem;
+  background: var(--surface);
+}
+.mcpurl {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+.mcpurl code {
+  font-size: 1rem;
+  background: var(--surface-2);
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  flex: 1 1 18rem;
+  overflow-x: auto;
+}
+.mcpcard .copy {
+  position: static;
+  min-height: var(--tap);
+  padding: 0 1rem;
+}
+
+.toollist { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.toollist li {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin: 0;
+  max-width: none;
+}
+.toollist code { flex: 0 0 auto; }
+.toollist span { color: var(--fg-muted); font-size: 0.9rem; }
+
+.steps { padding-inline-start: 1.4rem; }
+.steps li { margin-bottom: 0.6rem; }
+
+.callout {
+  border-inline-start: 4px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  margin: 1.5rem 0;
+}
+.callout p { margin: 0; }
+
+.params { display: grid; gap: 0.35rem; margin: 0.6rem 0; }
+.params > div { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; }
+.params dt { margin: 0; }
+.params dd { margin: 0; color: var(--fg-muted); font-size: 0.9rem; }
+
+.example { font-size: 0.85rem; margin-top: 0.6rem; }
+.example a { overflow-wrap: anywhere; }
+.muted { color: var(--fg-muted); }
+
+@media (max-width: 30rem) {
+  .params > div { grid-template-columns: 1fr; }
 }

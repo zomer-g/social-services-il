@@ -9,6 +9,7 @@
     "dev": "node --watch dist/server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.124.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@ssil/core": "*",
     "@ssil/db": "*",
