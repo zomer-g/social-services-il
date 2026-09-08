@@ -1,38 +1,21 @@
-import { Router, type NextFunction, type Request, type Response } from 'express';
+import { randomBytes } from 'node:crypto';
+import { Router, type Request, type Response } from 'express';
 import { query } from '@ssil/db';
 import { clearFixtures, loadFixtures, loadTaxonomy } from '@ssil/ingest';
 import { mintKey } from '../apikeys.js';
+import { requireRole } from '../auth.js';
 import { config } from '../config.js';
 
 /**
  * Administrative operations.
  *
- * Guarded for now by a single bearer token in ADMIN_TOKEN. Google sign-in with
- * invitations and per-role permissions replaces this in the admin phase; until
- * then the token is the whole of the authorisation model, and every route here
- * changes published data, so the guard refuses outright when no token is set
- * rather than defaulting to open.
+ * Guarded by requireRole, which accepts either a signed-in user with a
+ * sufficient role or the bootstrap token in ADMIN_TOKEN — the token being how
+ * the first administrator gets invited and how automated checks run.
  */
 export const adminRouter: Router = Router();
 
-function requireToken(req: Request, res: Response, next: NextFunction): void {
-  const expected = process.env['ADMIN_TOKEN'];
-  if (!expected) {
-    res.status(503).json({ error: 'admin_disabled', message: 'ADMIN_TOKEN is not configured' });
-    return;
-  }
-  const header = req.get('authorization') ?? '';
-  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-  // Length-independent comparison is not worth the ceremony here, but a plain
-  // equality check on a fixed-length token is: both sides are constants.
-  if (presented.length !== expected.length || presented !== expected) {
-    res.status(401).json({ error: 'unauthorized' });
-    return;
-  }
-  next();
-}
-
-adminRouter.use(requireToken);
+adminRouter.use(requireRole('editor'));
 
 function handle(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response) => {
@@ -395,5 +378,139 @@ adminRouter.post(
         organizations: organizations.rowCount ?? 0,
       },
     });
+  }),
+);
+
+/** Who is signed in, and what they may do. */
+adminRouter.get(
+  '/me',
+  handle(async (req, res) => {
+    res.json({ user: req.user });
+  }),
+);
+
+/**
+ * Invitations.
+ *
+ * The only way into the admin. An uninvited Google account that signs in
+ * successfully is still refused, because anyone can obtain a Google account and
+ * this admin publishes a directory people rely on in emergencies.
+ */
+adminRouter.get(
+  '/invites',
+  handle(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT i.id, i.email, i.role, i.expires_at, i.accepted_at, i.created_at
+         FROM invites i ORDER BY i.created_at DESC LIMIT 100`,
+    );
+    const users = await query(
+      `SELECT id, email, name, role, active, last_login_at FROM users ORDER BY created_at`,
+    );
+    res.json({ invites: rows, users: users.rows });
+  }),
+);
+
+adminRouter.post(
+  '/invites',
+  handle(async (req, res) => {
+    const body = req.body as { email?: string; role?: string; organization_id?: string };
+    if (!body.email) {
+      res.status(400).json({ error: 'bad_request', message: 'email is required' });
+      return;
+    }
+    const roles = ['admin', 'editor', 'tagger', 'org_manager', 'viewer'];
+    const role = roles.includes(body.role ?? '') ? body.role : 'viewer';
+
+    // Generated here rather than in SQL: gen_random_bytes lives in pgcrypto,
+    // which is not installed, while gen_random_uuid is a Postgres builtin.
+    const token = randomBytes(24).toString('hex');
+    const { rows } = await query(
+      `INSERT INTO invites (email, role, organization_id, token, expires_at)
+       VALUES ($1, $2, $3, $4, now() + interval '14 days')
+       ON CONFLICT (lower(email)) WHERE accepted_at IS NULL
+       DO UPDATE SET role = EXCLUDED.role, expires_at = EXCLUDED.expires_at
+       RETURNING id, email, role, expires_at`,
+      [body.email.toLowerCase(), role, body.organization_id ?? null, token],
+    );
+
+    res.status(201).json({
+      ...rows[0],
+      // There is no email to click: the invited person signs in with Google and
+      // is recognised. Saying so avoids someone waiting for a message.
+      note: 'Tell them to sign in with Google at /admin — no invitation email is sent.',
+    });
+  }),
+);
+
+adminRouter.post(
+  '/users/:id/role',
+  handle(async (req, res) => {
+    const roles = ['admin', 'editor', 'tagger', 'org_manager', 'viewer'];
+    const role = String(req.query['role'] ?? '');
+    if (!roles.includes(role)) {
+      res.status(400).json({ error: 'bad_request', message: `role must be one of: ${roles.join(', ')}` });
+      return;
+    }
+    const { rowCount } = await query('UPDATE users SET role = $2 WHERE id = $1', [req.params['id'], role]);
+    res.status(rowCount ? 200 : 404).json({ updated: (rowCount ?? 0) > 0, role });
+  }),
+);
+
+/** The corpus at a glance: what is live, what is waiting, what is broken. */
+adminRouter.get(
+  '/overview',
+  handle(async (_req, res) => {
+    const { rows } = await query(`
+      SELECT
+        (SELECT count(*) FROM cards)::int                                        AS cards,
+        (SELECT count(*) FROM services)::int                                     AS services_total,
+        (SELECT count(*) FROM services WHERE status = 'published')::int          AS services_published,
+        (SELECT count(*) FROM services WHERE status = 'draft')::int              AS services_draft,
+        (SELECT count(*) FROM organizations)::int                                AS organizations,
+        (SELECT count(*) FROM branches)::int                                     AS branches,
+        (SELECT count(*) FROM card_rejections)::int                              AS rejections,
+        (SELECT count(*) FROM moderation_queue WHERE status = 'pending')::int    AS pending_review,
+        (SELECT count(*) FROM feedback_reports WHERE status = 'open')::int       AS open_reports,
+        (SELECT count(*) FROM locations
+          WHERE NOT national_service AND geom IS NULL)::int                      AS unresolved_locations,
+        (SELECT count(*) FROM entity_taxonomy WHERE origin = 'llm')::int         AS tag_suggestions,
+        (SELECT count(*) FROM search_events
+          WHERE result_count = 0 AND at > now() - interval '30 days')::int        AS empty_searches_30d,
+        (SELECT value FROM system_state WHERE key = 'cards_need_rebuild')        AS rebuild_pending,
+        (SELECT max(updated_at) FROM cards)                                      AS last_updated
+    `);
+    res.json(rows[0] ?? {});
+  }),
+);
+
+/** Reports from the public. */
+adminRouter.get(
+  '/reports',
+  handle(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT f.id, f.card_id, f.kind, f.message, f.contact, f.status, f.created_at,
+              c.service_name, c.organization_name
+         FROM feedback_reports f
+         LEFT JOIN cards c ON c.card_id = f.card_id
+        WHERE f.status = 'open'
+        ORDER BY f.created_at DESC LIMIT 200`,
+    );
+    res.json({ reports: rows });
+  }),
+);
+
+adminRouter.post(
+  '/reports/:id',
+  handle(async (req, res) => {
+    const status = String(req.query['status'] ?? 'acknowledged');
+    if (!['acknowledged', 'fixed', 'rejected'].includes(status)) {
+      res.status(400).json({ error: 'bad_request' });
+      return;
+    }
+    const { rowCount } = await query(
+      `UPDATE feedback_reports SET status = $2, resolved_at = now() WHERE id = $1`,
+      [req.params['id'], status],
+    );
+    res.status(rowCount ? 200 : 404).json({ updated: (rowCount ?? 0) > 0 });
   }),
 );

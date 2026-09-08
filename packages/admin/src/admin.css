@@ -1,0 +1,160 @@
+/*
+ * The admin is a working tool for a small team, used at a desk for long
+ * stretches: dense, high-contrast, and quiet. It shares the public site's
+ * variables so the two do not feel like different products.
+ */
+
+:root {
+  --bg: #f6f7fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --fg: #14161c;
+  --muted: #5b6273;
+  --border: #d8dde7;
+  --accent: #17418f;
+  --accent-fg: #fff;
+  --warn: #8a5200;
+  --warn-soft: #fdf3e2;
+  --error: #a3231d;
+  --radius: 10px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1016; --surface: #171a22; --surface-2: #1f232d;
+    --fg: #eef0f6; --muted: #a3abbd; --border: #2c3140;
+    --accent: #9db8ff; --accent-fg: #0e1016;
+    --warn: #f0c070; --warn-soft: #2c2313; --error: #ff8f88;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+}
+
+main { max-width: 62rem; margin: 0 auto; padding: 1.5rem 1.25rem 5rem; }
+
+h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 0.5rem; }
+code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85em; }
+.muted { color: var(--muted); }
+.error { color: var(--error); }
+
+.adminbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.adminbar nav { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-inline-end: auto; }
+.adminbar nav button {
+  font: inherit;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.adminbar nav button.active { background: var(--accent); color: var(--accent-fg); }
+.adminbar nav button:hover:not(.active) { background: var(--surface-2); }
+
+.btn {
+  font: inherit;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-block;
+}
+.btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--border); }
+.btn.small { padding: 0.25rem 0.6rem; font-size: 0.85rem; }
+.btn:disabled { opacity: 0.6; cursor: progress; }
+
+.signin { max-width: 24rem; margin: 6rem auto; padding: 0 1.25rem; text-align: center; }
+.signin form { margin-top: 2rem; display: grid; gap: 0.5rem; text-align: start; }
+.signin input { font: inherit; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--fg); }
+
+form.inline { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0; }
+form.inline input, form.inline select {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+}
+form.inline input[type='number'] { width: 6rem; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: 0.75rem; margin: 1rem 0; }
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+}
+/* A count that is only worth looking at when it is not zero. */
+.stat.warn { background: var(--warn-soft); border-color: var(--warn); }
+.stat .value { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat .label { color: var(--muted); font-size: 0.85rem; }
+
+table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.9rem; }
+th, td { text-align: start; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+tr.revoked { opacity: 0.55; }
+.rowactions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+.banner {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.85rem;
+  margin: 1rem 0;
+}
+.secret {
+  display: block;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: var(--surface);
+  border-radius: 6px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.report {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.8rem 1rem;
+  margin: 0.75rem 0;
+}
+.report h3 { margin: 0 0 0.2rem; font-size: 1rem; }
+
+.explain {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.8rem;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  direction: ltr;
+  text-align: start;
+}
+
+.actions { display: flex; gap: 0.5rem; margin: 1rem 0; }
