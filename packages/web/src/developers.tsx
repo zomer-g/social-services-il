@@ -151,9 +151,20 @@ export function DevelopersPage() {
   );
 }
 
-/** Renders `code` spans in prose without pulling in a Markdown parser. */
+/**
+ * Renders the two bits of Markdown the spec's prose actually uses — code spans
+ * and bold — without pulling in a parser. Anything else is left as written.
+ */
 function renderInline(text: string) {
-  return text.split('`').map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : <span key={i}>{part}</span>));
+  return text.split('`').map((part, i) =>
+    i % 2 === 1 ? (
+      <code key={i}>{part}</code>
+    ) : (
+      <span key={i}>
+        {part.split('**').map((bit, j) => (j % 2 === 1 ? <strong key={j}>{bit}</strong> : bit))}
+      </span>
+    ),
+  );
 }
 
 function CodeBlock({ code }: { code: string }) {
