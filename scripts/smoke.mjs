@@ -67,27 +67,60 @@ async function main() {
     // anywhere between this script and Postgres, which otherwise presents as
     // "search matches everything" and is easy to misread as a ranking bug.
     const r = await get('/api/v1/search', { q: 'מקלט' });
-    check('a Hebrew query does not match the whole corpus', (r.body?.total ?? 99) < 5, `total ${r.body?.total}`);
+    const all = await get('/api/v1/search', {});
+    check('a Hebrew query narrows the corpus rather than matching all of it',
+      (r.body?.total ?? 0) > 0 && r.body.total < (all.body?.total ?? 0) / 4,
+      `${r.body?.total} of ${all.body?.total}`);
   }
 
   console.log('\nfinding a service by its own words');
   {
-    const r = await get('/api/v1/search', { q: 'ארוחה חמה' });
-    check('"ארוחה חמה" finds the soup kitchen', has(r, 'ארוחה חמה'), names(r).join(', '));
+    const r = await get('/api/v1/search', { q: 'בית תמחוי' });
+    check('a phrase from real service names finds something', (r.body?.total ?? 0) > 0, `total ${r.body?.total}`);
+    check('and what it finds is about food',
+      (r.body?.cards ?? []).some((c) => c.response_ids.some((id) => id.startsWith('human_services:food'))),
+      names(r).slice(0, 3).join(', '));
 
-    const r2 = await get('/api/v1/search', { q: 'מקלט לנשים' });
-    check('"מקלט לנשים" finds the shelter', has(r2, 'מקלט'), names(r2).join(', '));
+    const r2 = await get('/api/v1/search', { q: 'אלימות במשפחה' });
+    check('"אלימות במשפחה" finds relevant services', (r2.body?.total ?? 0) > 0, `total ${r2.body?.total}`);
   }
 
   console.log('\nfinding a service by a word that is not in it');
   {
-    // The synonym lives on the taxonomy node, not on the service, so this only
-    // works if tag text is being indexed into the card.
-    const r = await get('/api/v1/search', { q: 'עוני' });
-    check('"עוני" reaches low-income services through a synonym', (r.body?.total ?? 0) > 0, `total ${r.body?.total}`);
+    // "אוכל" is a synonym on the food category, not a word in that category's
+    // own name. It only works if tag text and synonyms are indexed into cards,
+    // and those synonyms are the hand-built ones from the export.
+    const r = await get('/api/v1/search', { q: 'אוכל' });
+    check('a synonym reaches its category', (r.body?.total ?? 0) > 0, `total ${r.body?.total}`);
+    check('and the results really are in that category',
+      (r.body?.cards ?? []).some((c) => c.response_ids.some((id) => id.startsWith('human_services:food'))),
+      names(r).slice(0, 3).join(', '));
+  }
 
-    const r2 = await get('/api/v1/search', { q: 'בית תמחוי' });
-    check('"בית תמחוי" reaches the soup kitchen through a synonym', has(r2, 'ארוחה חמה'), names(r2).join(', '));
+  console.log('\nmisspellings');
+  {
+    // The fallback pass exists for exactly this, and it is the difference
+    // between finding a shelter and finding nothing.
+    for (const [typo, meant] of [['תמחווי', 'תמחוי'], ['מקלת', 'מקלט'], ['ניצולי שאוה', 'ניצולי שואה']]) {
+      const r = await get('/api/v1/search', { q: typo });
+      check(`"${typo}" still finds "${meant}"`, (r.body?.total ?? 0) > 0, `total ${r.body?.total}`);
+    }
+  }
+
+  console.log('\nspeed');
+  {
+    // Someone in distress on a phone will not wait. This caught a real
+    // regression: a predicate shape that defeated the index made every
+    // free-text search take about 1.4 seconds on the full corpus.
+    const slow = [];
+    for (const q of ['סל מזון', 'דיור מוגן', 'אלימות במשפחה', 'ניצולי שואה']) {
+      await get('/api/v1/search', { q, limit: 1 });
+      const started = Date.now();
+      await get('/api/v1/search', { q, limit: 1 });
+      const ms = Date.now() - started;
+      if (ms > 800) slow.push(`${q}: ${ms}ms`);
+    }
+    check('free-text search answers well under a second', slow.length === 0, slow.join(', '));
   }
 
   console.log('\nHebrew morphology');
@@ -96,7 +129,13 @@ async function main() {
     const plain = await get('/api/v1/search', { q: 'מזון' });
     const prefixed = await get('/api/v1/search', { q: 'למזון' });
     check('"מזון" finds something', (plain.body?.total ?? 0) > 0, `total ${plain.body?.total}`);
-    check('"למזון" finds the same as "מזון"', prefixed.body?.total === plain.body?.total,
+    // Not identical: "מזון" also contributes its de-prefixed form as a prefix
+    // match, which reaches a handful of records "למזון" does not. What matters
+    // is that the two land on substantially the same set rather than missing
+    // each other entirely.
+    const ratio =
+      Math.min(prefixed.body.total, plain.body.total) / Math.max(prefixed.body.total, plain.body.total);
+    check('"למזון" finds substantially what "מזון" finds', ratio > 0.9,
       `${prefixed.body?.total} vs ${plain.body?.total}`);
 
     // Final-form folding: writing the medial form must still match.
@@ -117,8 +156,10 @@ async function main() {
     const all = await get('/api/v1/search', {});
     const national = await get('/api/v1/search', { national_service: 'only' });
     const local = await get('/api/v1/search', { national_service: 'exclude' });
-    check('national + local accounts for everything',
-      (national.body?.total ?? 0) + (local.body?.total ?? 0) === (all.body?.total ?? -1),
+    // An inequality, not an equality: collapsing merges a nationwide card and a
+    // local one into a single row, but each half of the split keeps its own.
+    check('splitting by nationwide covers the whole corpus',
+      (national.body?.total ?? 0) + (local.body?.total ?? 0) >= (all.body?.total ?? -1),
       `${national.body?.total} + ${local.body?.total} vs ${all.body?.total}`);
 
     const food = await get('/api/v1/search', { response: 'human_services:food' });
@@ -135,17 +176,26 @@ async function main() {
     const r = await get('/api/v1/search', { lat: 32.0565, lon: 34.7797, limit: 20 });
     const first = r.body?.cards?.[0];
     check('nearby results carry a distance', first?.distance_m !== undefined, JSON.stringify(first?.distance_m));
+    // Ranking blends relevance, substance and proximity, so results are not in
+    // strict distance order. What must hold is that a location search returns
+    // things that are actually near.
     const localCards = (r.body?.cards ?? []).filter((c) => !c.national_service && c.distance_m != null);
-    const sorted = localCards.every((c, i) => i === 0 || localCards[i - 1].distance_m <= c.distance_m * 6);
-    check('closer services rank near the top', sorted, localCards.map((c) => `${c.city}:${c.distance_m}`).join(', '));
+    const median = localCards.map((c) => c.distance_m).sort((a, b) => a - b)[Math.floor(localCards.length / 2)];
+    check('a location search returns genuinely nearby services',
+      median !== undefined && median < 15000, `median distance ${median}m`);
 
     const radius = await get('/api/v1/search', { lat: 32.0565, lon: 34.7797, radius_km: 5 });
     const outside = (radius.body?.cards ?? []).filter(
       (c) => !c.national_service && c.distance_m != null && c.distance_m > 5000,
     );
     check('a radius excludes anything beyond it', outside.length === 0, `${outside.length} outside`);
-    check('a radius still returns nationwide services',
-      (radius.body?.cards ?? []).some((c) => c.national_service),
+    // Checked against the whole result set rather than the first page: on a real
+    // corpus the first twenty rows can legitimately all be local.
+    const nationwideInRadius = await get('/api/v1/search', {
+      lat: 32.0565, lon: 34.7797, radius_km: 5, national_service: 'only', limit: 1,
+    });
+    check('a radius still includes nationwide services',
+      (nationwideInRadius.body?.total ?? 0) > 0,
       'nationwide services were filtered out by the radius');
   }
 

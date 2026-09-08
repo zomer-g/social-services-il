@@ -215,8 +215,11 @@ async function main() {
 
     await call('/api/admin/purge-source?slug=' + SOURCE_SLUG, { method: 'POST', token: ADMIN_TOKEN });
     await call('/api/admin/rebuild', { method: 'POST', token: ADMIN_TOKEN });
-    const left = await call('/api/v1/search?q=' + encodeURIComponent('שירות בדיקה'));
-    check('test data is gone afterwards', (left.body?.total ?? 0) === 0, `total ${left.body?.total}`);
+    // Checked by source rather than by searching for the test wording: on a real
+    // corpus that phrase also matches genuine services.
+    const sources = await call('/api/admin/sources', { token: ADMIN_TOKEN });
+    const mine = (sources.body?.sources ?? []).find((s) => s.slug === SOURCE_SLUG);
+    check('test data is gone afterwards', (mine?.services ?? 0) === 0, `${mine?.services} services left`);
   }
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

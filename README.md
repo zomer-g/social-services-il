@@ -31,17 +31,20 @@ this project keeps, changes and adds.
 
 ## What works today
 
+Loaded with the real corpus: **11,024 services** from **2,534 organizations**
+across **17,944 branches**, producing **16,371 cards** in **742 cities**.
+
 | | |
 | --- | --- |
 | Public site | Hebrew, Arabic, Russian and English; mobile-first; results actionable without opening them; urgent helplines outside the ranked results |
-| Search | Hebrew normalisation, facets, distance ranking, collapsing of duplicate offerings |
+| Search | Hebrew normalisation with prefix variants, synonyms, facets, distance ranking, collapsing, and a misspelling fallback. Free text answers in 95–300 ms |
 | Read API | Documented and versioned, with bulk NDJSON export and `updated_since` |
-| Write API | Idempotent push, `dry_run`, per-item errors, trust-based publish or review |
+| Write API | Idempotent push, `dry_run`, per-item errors and warnings, trust-based publish or review |
 | MCP | Eight read-only tools, two resources, one guided prompt; no credentials |
 | Admin | Google sign-in by invitation, moderation, sources, API keys, diagnostics |
 | Importer | Converts the six-table export and pushes it through the public write API |
 
-Three suites cover it end to end — 92 checks, all passing against production:
+Three suites cover it end to end — 97 checks, all passing against production:
 
 ```bash
 node scripts/smoke.mjs https://social-services-il-zomerg.xhostd.app
@@ -49,9 +52,22 @@ node scripts/smoke-mcp.mjs https://social-services-il-zomerg.xhostd.app
 ADMIN_TOKEN=... node scripts/smoke-ingest.mjs https://social-services-il-zomerg.xhostd.app
 ```
 
-The corpus currently holds development fixtures — invented organisations, not a
-copy of anyone's data — so that search, collapsing, distance ranking and the
-rejection path can be exercised before real data arrives.
+### What the import left behind
+
+6,562 service-branch pairs are held back because their address never geocoded
+and they are not marked nationwide — a card with neither a point nor a
+nationwide flag cannot answer "where do I go". They are listed in the admin's
+diagnostics with the address that failed, which is the shortest route to fixing
+them. 793 services carry no response tag and 11,036 are inactive upstream;
+neither is imported.
+
+Two fields are deliberately not imported. `boost` holds values up to 300, and
+this system treats boost as a power of ten, so importing it verbatim would
+produce infinities — editorial ranking is better re-established deliberately
+than inherited with unknown semantics. And two services reference a taxonomy id
+that does not exist in the export's own taxonomy tables, one of them visibly
+corrupt (`human_services:hehuman_services:health:...`); they are reported rather
+than guessed at.
 
 ## Two things only you can do
 
@@ -69,20 +85,24 @@ set_env GOOGLE_CLIENT_SECRET=...  # secret
 falls back to the bootstrap token in `ADMIN_TOKEN`, which is also how the first
 administrator invites themselves.
 
-**Real data.** Point the importer at a directory of the six exported tables:
+**Real data** is loaded. To reload or update it:
 
 ```bash
-# convert and read the result before writing anything
-node scripts/import-airtable.mjs ./export --out payload.json
+# taxonomy first — the export's tree is a superset of the published one and
+# carries 498 hand-built synonym terms that exist nowhere else
+node scripts/import-airtable.mjs ./export --taxonomy --url https://... --admin <token>
 
-# then push, against staging first
-node scripts/import-airtable.mjs ./export --url https://... --key ssil_... --dry-run
-node scripts/import-airtable.mjs ./export --url https://... --key ssil_...
+# convert and read before writing anything
+node scripts/import-airtable.mjs ./export --services --out payload.json
+
+# then push
+node scripts/import-airtable.mjs ./export --services --url https://... --key ssil_...
 ```
 
 It matches files by their columns rather than their names, and honours the
-curation the export carries: `name_manual` beats `name`, `responses_manual_ids`
-beats `response_ids`, and a hand-corrected coordinate beats the geocoder's.
+curation the export carries: `final_responses` and `final_situations` over the
+raw columns, `name_manual` over `name`, and a hand-corrected coordinate over the
+geocoder's.
 
 ## Stack
 
