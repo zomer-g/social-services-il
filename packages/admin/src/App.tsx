@@ -48,20 +48,33 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
+interface AuthStatus {
+  signed_in: boolean;
+  authorised: boolean;
+  email: string | null;
+  user: { email: string; role: string } | null;
+  login_url: string;
+  logout_url: string;
+}
+
 export function App() {
-  const [user, setUser] = useState<{ email: string; role: string } | null>(null);
-  const [ssoAvailable, setSsoAvailable] = useState(false);
+  const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [checking, setChecking] = useState(true);
 
   const check = useCallback(async () => {
     try {
-      const status = await api<{ google_configured: boolean }>('/api/auth/status');
-      setSsoAvailable(status.google_configured);
-      const me = await api<{ user: { email: string; role: string } }>('/api/admin/me');
-      setUser(me.user);
+      const status = await api<AuthStatus>('/api/auth/status');
+      // A bootstrap token grants access even when no Google identity is
+      // present, so the token path has to be able to report itself authorised.
+      if (!status.authorised && bootstrapToken) {
+        const me = await api<{ user: { email: string; role: string } }>('/api/admin/me');
+        setAuth({ ...status, authorised: true, user: me.user });
+        return;
+      }
+      setAuth(status);
     } catch {
-      setUser(null);
+      setAuth(null);
     } finally {
       setChecking(false);
     }
@@ -71,8 +84,10 @@ export function App() {
     void check();
   }, [check]);
 
-  if (checking) return <p className="muted">בודק…</p>;
-  if (!user) return <SignIn ssoAvailable={ssoAvailable} onSignedIn={check} />;
+  if (checking) return <p className="muted" style={{ padding: '2rem' }}>בודק…</p>;
+  if (!auth?.authorised) return <SignIn auth={auth} onSignedIn={check} />;
+
+  const user = auth.user!;
 
   return (
     <>
@@ -88,6 +103,9 @@ export function App() {
         <span className="muted">
           {user.email} · {user.role}
         </span>
+        <a className="btn small secondary" href={auth.logout_url}>
+          יציאה
+        </a>
       </header>
 
       <main>
@@ -104,44 +122,65 @@ export function App() {
   );
 }
 
-function SignIn({ ssoAvailable, onSignedIn }: { ssoAvailable: boolean; onSignedIn: () => void }) {
+/**
+ * Three states, not two.
+ *
+ * Not signed in, signed in but not permitted, and in. The middle one is the
+ * one worth getting right: it means "ask to be invited", not "try again", and
+ * telling someone to retry a thing that cannot succeed is its own small cruelty.
+ */
+function SignIn({ auth, onSignedIn }: { auth: AuthStatus | null; onSignedIn: () => void }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   return (
     <div className="signin">
       <h1>ניהול</h1>
-      {ssoAvailable ? (
-        <a className="btn" href="/api/auth/google">
-          כניסה עם Google
-        </a>
+
+      {auth?.signed_in ? (
+        <>
+          <p className="banner">
+            נכנסת עם <strong>{auth.email}</strong>, אבל החשבון הזה אינו מורשה לממשק הניהול.
+          </p>
+          <p className="muted">יש לבקש הזמנה ממנהל המערכת, או להתחבר עם חשבון אחר.</p>
+          <p>
+            <a className="btn secondary" href={auth.logout_url}>
+              התחברות עם חשבון אחר
+            </a>
+          </p>
+        </>
       ) : (
-        <p className="muted">
-          כניסה עם Google עדיין לא הוגדרה. יש להגדיר את משתני הסביבה
-          <code> GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> ו־<code>SESSION_SECRET</code>.
-        </p>
+        <>
+          <p className="muted">הכניסה בחשבון Google, למשתמשים מורשים בלבד.</p>
+          <a className="btn" href={auth?.login_url ?? '/xhost-auth/login?return_to=/admin/'}>
+            כניסה עם Google
+          </a>
+        </>
       )}
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          bootstrapToken = token.trim();
-          setError(null);
-          api('/api/admin/me')
-            .then(onSignedIn)
-            .catch((err: Error) => {
-              bootstrapToken = '';
-              setError(err.message);
-            });
-        }}
-      >
-        <label htmlFor="token">או מפתח ניהול זמני</label>
-        <input id="token" type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
-        <button type="submit" className="btn secondary">
-          כניסה
-        </button>
-        {error && <p className="error">{error}</p>}
-      </form>
+      <details>
+        <summary className="muted">כניסה עם מפתח ניהול</summary>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            bootstrapToken = token.trim();
+            setError(null);
+            api('/api/admin/me')
+              .then(onSignedIn)
+              .catch((err: Error) => {
+                bootstrapToken = '';
+                setError(err.message);
+              });
+          }}
+        >
+          <label htmlFor="token">מפתח חירום, לשחזור גישה כשההתחברות שבורה</label>
+          <input id="token" type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" />
+          <button type="submit" className="btn secondary">
+            כניסה
+          </button>
+          {error && <p className="error">{error}</p>}
+        </form>
+      </details>
     </div>
   );
 }

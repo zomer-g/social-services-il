@@ -61,7 +61,17 @@ export function createApp(): Express {
   const hasBuiltSpa = existsSync(join(PUBLIC_DIR, 'index.html'));
   if (hasBuiltSpa) {
     app.use(express.static(PUBLIC_DIR, { index: false, maxAge: '1h' }));
-    // Client-side routing: any non-API path falls through to the SPA shell.
+
+    // The admin is a second single-page app under /admin, and it needs its own
+    // shell. Without this the directory request falls past static — which is
+    // configured with index:false so that "/" reaches the router rather than a
+    // file — into the catch-all below, and /admin/ silently serves the public
+    // site instead. It looks like the admin was never built.
+    app.get(/^\/admin(\/.*)?$/, (_req, res) => {
+      res.sendFile(join(PUBLIC_DIR, 'admin', 'index.html'));
+    });
+
+    // Client-side routing: any other non-API path falls through to the public shell.
     app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(join(PUBLIC_DIR, 'index.html')));
   } else {
     // Without a built front end the health probe still needs a 2xx at /.
