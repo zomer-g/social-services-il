@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom';
 import { LangSwitch, useSaved } from './components.js';
+import { DevelopersPage } from './developers.js';
 import { detectLang, RTL, stringsFor, type Lang } from './i18n.js';
 import { HomePage, ResultsPage, SavedPage, ServicePage } from './pages.js';
 
@@ -61,13 +62,14 @@ function Shell() {
           <Route path="/search" element={<ResultsPage lang={lang} />} />
           <Route path="/s/:cardId" element={<ServicePage lang={lang} />} />
           <Route path="/saved" element={<SavedPage lang={lang} />} />
+          <Route path="/developers" element={<DevelopersPage />} />
           <Route path="*" element={<HomePage lang={lang} />} />
         </Routes>
 
         <footer className="footer">
           <p>{t.disclaimer}</p>
           <nav>
-            <a href="/api/v1/stats">{t.apiLink}</a>
+            <Link to={langLink('/developers')}>{t.apiLink}</Link>
             <a href="https://github.com/zomer-g/social-services-il">{t.aboutLink}</a>
           </nav>
         </footer>

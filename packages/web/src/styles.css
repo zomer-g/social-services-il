@@ -445,3 +445,81 @@ a { color: var(--accent); }
 @media (max-width: 26rem) {
   .brand { font-size: 0.9rem; }
 }
+
+/* ---------- developer documentation ---------- */
+
+/* Forced left-to-right regardless of interface language: this page is mostly
+   URLs, JSON and shell commands, which read wrongly in an RTL context. */
+.devdocs { max-width: 100%; }
+.devdocs .version { color: var(--fg-muted); margin-top: -0.5rem; }
+.devdocs h2 { margin-top: 2rem; }
+.devdocs code {
+  background: var(--surface-2);
+  padding: 0.1rem 0.35rem;
+  border-radius: 5px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  word-break: break-word;
+}
+
+.endpoint {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin: 1rem 0;
+  background: var(--surface);
+}
+.endpoint h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+}
+.endpoint .summary { color: var(--fg-muted); }
+.method {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.method.post, .method.delete { background: var(--urgent-soft); color: var(--urgent); }
+
+.endpoint table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 0.5rem 0; }
+.endpoint th, .endpoint td {
+  text-align: start;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.endpoint th { color: var(--fg-muted); font-weight: 600; }
+.req { color: var(--urgent); font-size: 0.75rem; }
+
+.codeblock { position: relative; margin: 0.75rem 0; }
+.codeblock pre {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.85rem;
+  /* Long curl lines scroll inside the block rather than widening the page. */
+  overflow-x: auto;
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.codeblock pre code { background: none; padding: 0; }
+.codeblock .copy {
+  position: absolute;
+  top: 0.4rem;
+  inset-inline-end: 0.4rem;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}

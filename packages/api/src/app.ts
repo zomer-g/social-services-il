@@ -6,6 +6,7 @@ import cors from 'cors';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
 import { handleMcpRequest } from './mcp.js';
+import { openapi } from './openapi.js';
 import { adminRouter } from './routes/admin.js';
 import { ingestRouter } from './routes/ingest.js';
 import { healthRouter } from './routes/health.js';
@@ -32,6 +33,12 @@ export function createApp(): Express {
   // The read API is public data and is meant to be called from anywhere,
   // including other people's sites. Write routes authenticate by API key.
   app.use('/api', cors({ origin: '*', methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'] }));
+
+  // The machine-readable contract, served by the instance it describes, so it
+  // can never document a version that is not deployed.
+  app.get('/api/openapi.json', cors({ origin: '*' }), (_req, res) => {
+    res.set('Cache-Control', 'public, max-age=300').json(openapi);
+  });
 
   app.use('/api', healthRouter);
   app.use('/api/v1', v1Router);

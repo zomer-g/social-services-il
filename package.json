@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "Open platform for Israel's social services: public site, admin, documented API and MCP server",
   "license": "MIT",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "packages/core",
     "packages/db",
@@ -18,7 +20,8 @@
     "dev": "npm run dev -w @ssil/api",
     "migrate": "node packages/db/dist/migrate.js",
     "typecheck": "tsc -b --pretty",
-    "test": "node --test packages/*/dist/**/*.test.js"
+    "test": "node --test packages/*/dist/**/*.test.js",
+    "openapi": "node scripts/dump-openapi.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
