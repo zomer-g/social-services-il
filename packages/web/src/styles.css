@@ -409,7 +409,9 @@ a { color: var(--accent); }
   display: inline-flex;
   align-items: center;
   min-height: var(--tap);
-  padding: 0 0.25rem;
+  min-width: var(--tap);
+  justify-content: center;
+  padding: 0 0.4rem;
 }
 
 .spinner {

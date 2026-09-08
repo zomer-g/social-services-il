@@ -320,6 +320,9 @@ export function ResultsPage({ lang }: { lang: Lang }) {
         </div>
       )}
 
+      {/* The cards use h3, so without this the outline jumps from 1 to 3 and a
+          screen reader loses the level the results sit at. */}
+      <h2 className="visually-hidden">{t.results}</h2>
       <ul className="cards">
         {cards.map((card) => (
           <ActionCard
@@ -518,6 +521,7 @@ export function SavedPage({ lang }: { lang: Lang }) {
   return (
     <>
       <h1>{t.myFolder}</h1>
+      <h2 className="visually-hidden">{t.results}</h2>
       <ul className="cards">
         {cards.map((card) => (
           <ActionCard key={card.card_id} card={card} lang={lang} saved onToggleSave={toggleSave} />

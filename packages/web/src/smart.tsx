@@ -127,17 +127,20 @@ export function SmartPage({ lang }: { lang: Lang }) {
       </div>
 
       {result && result.cards.length > 0 && (
-        <ul className="cards">
-          {result.cards.map((card) => (
-            <ActionCard
-              key={card.card_id}
-              card={card}
-              lang={lang}
-              saved={saved.includes(card.card_id)}
-              onToggleSave={toggleSave}
-            />
-          ))}
-        </ul>
+        <>
+          <h2 className="visually-hidden">{t.results}</h2>
+          <ul className="cards">
+            {result.cards.map((card) => (
+              <ActionCard
+                key={card.card_id}
+                card={card}
+                lang={lang}
+                saved={saved.includes(card.card_id)}
+                onToggleSave={toggleSave}
+              />
+            ))}
+          </ul>
+        </>
       )}
 
       {result && result.cards.length === 0 && !loading && (
