@@ -81,19 +81,23 @@ button hides itself until it is set:
 set_env ANTHROPIC_API_KEY=sk-ant-...   # secret
 ```
 
-**Google sign-in** needs OAuth credentials, which have to be created by hand in
-the Google Cloud console. Create an OAuth client (type: Web application) with
-the redirect URI `https://<your-host>/api/auth/google/callback`, then:
+**Google sign-in is already working** and needed no credentials: the hosting
+platform mounts it on every channel, and the app verifies the signed identity
+token it sets. To grant someone access, either add their address to the
+allowlist or invite them from the admin:
 
 ```bash
-# via the xhostd MCP, or the console
-set_env GOOGLE_CLIENT_ID=...      # secret
-set_env GOOGLE_CLIENT_SECRET=...  # secret
+set_env ADMIN_EMAILS=first@example.com,second@example.com   # secret
 ```
 
-`SESSION_SECRET` is already set. Until the two Google values exist, the admin
-falls back to the bootstrap token in `ADMIN_TOKEN`, which is also how the first
-administrator invites themselves.
+The allowlist is the bootstrap — without it the first administrator could never
+sign in to invite anyone. It is configuration rather than a database row so that
+losing the database does not lock everyone out. `ADMIN_TOKEN` remains as a
+recovery path and is what the test suites use.
+
+(`SESSION_SECRET`, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are no longer
+read by anything — the platform's own sign-in replaced the hand-rolled OAuth
+flow. `SESSION_SECRET` is still set on the app and can be deleted.)
 
 **Real data** is loaded. To reload or update it:
 
@@ -177,6 +181,15 @@ A few decisions are load-bearing and easy to undo by accident:
   reached by the same mechanism, and so a second source is a URL in the admin
   rather than an integration. The all-sources button only appears once a second
   server is enabled.
+- **The admin is a second SPA under `/admin`** and needs its own route before
+  the catch-all. Static is served with `index: false` so that `/` reaches the
+  router, which means a bare `/admin/` otherwise falls through and silently
+  serves the public site — indistinguishable from the admin never having been
+  built.
+- **Identity is verified, not trusted.** RS256 is pinned rather than read from
+  the token's own header, and the audience comes from the request host rather
+  than a constant, so a token minted for one channel cannot be replayed at
+  another. `scripts/check-auth.mjs` tries to forge its way in.
 - **Contrast is checked, not eyeballed.** `npm run check:contrast` fails the
   build's palette if any pair drops below AAA; the first palette failed six of
   thirteen pairs, all in the 5:1–7:1 range that looks fine.

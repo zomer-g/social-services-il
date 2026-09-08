@@ -134,9 +134,19 @@ adminRouter.get(
 adminRouter.get(
   '/config',
   handle(async (_req, res) => {
+    // Counts and flags, never the values: this endpoint exists to answer "is it
+    // configured", and printing an allowlist of who can administer the site
+    // would be a small gift to anyone who got this far.
+    const allowlisted = (process.env['ADMIN_EMAILS'] ?? '')
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean).length;
+
     res.json({
       env: config.env,
       hasAnthropicKey: config.anthropicApiKey.length > 0,
+      adminEmailsConfigured: allowlisted,
+      signInProvider: 'google (platform)',
       version: process.env['XHOST_SHA'] ?? 'dev',
     });
   }),

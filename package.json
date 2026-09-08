@@ -22,7 +22,8 @@
     "typecheck": "tsc -b --pretty",
     "test": "node --test packages/*/dist/**/*.test.js",
     "openapi": "node scripts/dump-openapi.mjs",
-    "check:contrast": "node scripts/check-contrast.mjs"
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "check:auth": "node scripts/check-auth.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3",
