@@ -137,8 +137,11 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
       // near zero and a misspelling is never rescued. `<%` scores the query
       // against the closest word in the document, which is the question being
       // asked. The index applies to the right-hand side.
-      where.push(`ssil_normalize(${term}) <% c.search_text`);
-      trgm = `word_similarity(ssil_normalize(${term}), c.search_text)`;
+      // ssil_normalize_plain, not ssil_normalize: the fuzzy side compares one
+      // string against the text, and the prefix-variant expansion would turn
+      // "מקלת" into the two-word phrase "מקלת קלת" and match nothing.
+      where.push(`ssil_normalize_plain(${term}) <% c.search_text`);
+      trgm = `word_similarity(ssil_normalize_plain(${term}), c.search_text)`;
     }
   }
 
