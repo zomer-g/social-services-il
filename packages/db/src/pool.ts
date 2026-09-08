@@ -12,6 +12,20 @@ pg.types.setTypeParser(20, (v) => (v === null ? null : Number(v))); // int8
 
 let pool: pg.Pool | undefined;
 
+/**
+ * TLS is opt-in via the connection string, because the database the platform
+ * provisions sits on a private per-channel network and speaks plaintext —
+ * asking it for SSL fails the connection outright. A managed database reached
+ * over the open internet says `sslmode=require` in its URL and gets TLS.
+ */
+function sslOption(connectionString: string): pg.PoolConfig['ssl'] {
+  const mode = new URL(connectionString).searchParams.get('sslmode');
+  if (!mode || mode === 'disable' || mode === 'allow' || mode === 'prefer') return false;
+  // Providers front Postgres with certificates that do not chain to a public
+  // root, so verification is relaxed while the transport stays encrypted.
+  return { rejectUnauthorized: mode === 'verify-full' };
+}
+
 export function getPool(): pg.Pool {
   if (pool) return pool;
   const connectionString = process.env['DATABASE_URL'];
@@ -23,7 +37,7 @@ export function getPool(): pg.Pool {
     max: Number(process.env['PG_POOL_MAX'] ?? 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
-    ssl: connectionString.includes('sslmode=disable') ? false : { rejectUnauthorized: false },
+    ssl: sslOption(connectionString),
   });
   pool.on('error', (err) => console.error('[error] idle postgres client:', err.message));
   return pool;
