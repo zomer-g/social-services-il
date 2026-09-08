@@ -24,20 +24,37 @@ interface SmartResponse {
   understood: { responses: { id: string; name: string }[]; situations: { id: string; name: string }[]; city?: string };
   cards: Card[];
   tools_used: string[];
+  sources?: string[];
+  unavailable?: { server: string; error: string }[];
 }
 
-export function useSmartAvailable(): boolean {
-  const [available, setAvailable] = useState(false);
+export interface SearchModes {
+  /** A model key is configured, so either AI path can run at all. */
+  smart: boolean;
+  /**
+   * More than one MCP server is registered, so searching all of them is
+   * genuinely different from searching this corpus. With a single source the
+   * two buttons would do the same thing, and two buttons that do the same
+   * thing is worse than one.
+   */
+  deep: boolean;
+  sources: { slug: string; name: string; description: string | null }[];
+}
+
+export function useSearchModes(): SearchModes {
+  const [modes, setModes] = useState<SearchModes>({ smart: false, deep: false, sources: [] });
   useEffect(() => {
-    fetch('/api/v1/smart-search/status')
+    fetch('/api/v1/sources')
       .then((r) => r.json())
-      .then((s: { available: boolean }) => setAvailable(s.available))
-      .catch(() => setAvailable(false));
+      .then((s: { available: boolean; deep_search_useful: boolean; sources: SearchModes['sources'] }) =>
+        setModes({ smart: s.available, deep: s.available && s.deep_search_useful, sources: s.sources }),
+      )
+      .catch(() => setModes({ smart: false, deep: false, sources: [] }));
   }, []);
-  return available;
+  return modes;
 }
 
-export function SmartPage({ lang }: { lang: Lang }) {
+export function SmartPage({ lang, deep = false }: { lang: Lang; deep?: boolean }) {
   const t = stringsFor(lang);
   const [params] = useSearchParams();
   const [result, setResult] = useState<SmartResponse | null>(null);
@@ -53,7 +70,7 @@ export function SmartPage({ lang }: { lang: Lang }) {
     if (!q) return;
     setLoading(true);
     setError(null);
-    fetch('/api/v1/smart-search', {
+    fetch(deep ? '/api/v1/deep-search' : '/api/v1/smart-search', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -70,14 +87,14 @@ export function SmartPage({ lang }: { lang: Lang }) {
       .then(setResult)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [q, lang, lat, lon, t.smartError]);
+  }, [q, lang, lat, lon, deep, t.smartError]);
 
   const backToPlain = `/search?q=${encodeURIComponent(q)}&lang=${lang}${lat && lon ? `&lat=${lat}&lon=${lon}` : ''}`;
 
   return (
     <>
       <h1>
-        {t.smartAction}: <span className="quoted">{q}</span>
+        {deep ? t.deepAction : t.smartAction}: <span className="quoted">{q}</span>
       </h1>
 
       {/* A live region, so a screen reader is told the answer arrived rather
@@ -154,6 +171,18 @@ export function SmartPage({ lang }: { lang: Lang }) {
 
       {result && (
         <p className="source">
+          {/* Which sources actually answered. An answer assembled from two
+              sources when three were asked is a different answer, and hiding
+              that would be the wrong kind of tidy. */}
+          {deep && result.sources && result.sources.length > 0 && (
+            <>
+              {t.deepSources}: {result.sources.join(', ')}
+              {result.unavailable && result.unavailable.length > 0 && (
+                <> · {t.deepUnavailable(result.unavailable.map((u) => u.server).join(', '))}</>
+              )}
+              <br />
+            </>
+          )}
           <Link to={backToPlain}>{t.smartBackToPlain}</Link>
         </p>
       )}

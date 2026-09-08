@@ -3,6 +3,7 @@ import { Router, type Request, type Response } from 'express';
 import { query, transaction } from '@ssil/db';
 import { clearFixtures, loadFixtures, loadTaxonomy } from '@ssil/ingest';
 import { mintKey } from '../apikeys.js';
+import { baseUrlOf, listServers, testServer } from '../mcpclient.js';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
 
@@ -617,5 +618,108 @@ adminRouter.post(
 
     await query('SELECT refresh_taxonomy_counts()');
     res.json({ nodes: created, names, synonyms, skipped });
+  }),
+);
+
+/**
+ * The MCP servers the site's own search can reach.
+ *
+ * Registering a URL here is what makes another organisation's corpus
+ * searchable, without anyone writing an integration for it: an MCP server
+ * describes its own tools, so the search discovers what it can do at request
+ * time.
+ */
+adminRouter.get(
+  '/mcp-servers',
+  handle(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT id, slug, name, url, description, enabled, is_self,
+              auth_header IS NOT NULL AS has_credential,
+              last_checked_at, last_status, tool_count
+         FROM mcp_servers ORDER BY is_self DESC, name`,
+    );
+    res.json({ servers: rows });
+  }),
+);
+
+adminRouter.post(
+  '/mcp-servers',
+  handle(async (req, res) => {
+    const body = req.body as {
+      slug?: string; name?: string; url?: string; description?: string;
+      auth_header?: string; enabled?: boolean;
+    };
+    if (!body.slug || !body.name || !body.url) {
+      res.status(400).json({ error: 'bad_request', message: 'slug, name and url are required' });
+      return;
+    }
+
+    const { rows } = await query(
+      `INSERT INTO mcp_servers (slug, name, url, description, auth_header, enabled)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, true))
+       ON CONFLICT (slug) DO UPDATE SET
+         name = EXCLUDED.name, url = EXCLUDED.url, description = EXCLUDED.description,
+         -- An omitted credential leaves the stored one alone, so editing a
+         -- server's name does not silently drop its key.
+         auth_header = COALESCE(EXCLUDED.auth_header, mcp_servers.auth_header),
+         enabled = EXCLUDED.enabled, updated_at = now()
+       RETURNING id, slug, name, url, enabled`,
+      [body.slug, body.name, body.url, body.description ?? null,
+       body.auth_header ?? null, body.enabled ?? null],
+    );
+    res.status(201).json(rows[0]);
+  }),
+);
+
+/** Connects and lists the tools. Needs no model credentials, so it is the
+ *  cheapest way to find out whether a URL is actually a working MCP server. */
+adminRouter.post(
+  '/mcp-servers/:id/test',
+  handle(async (req, res) => {
+    res.json(await testServer(req.params['id'] as string, baseUrlOf(req)));
+  }),
+);
+
+adminRouter.post(
+  '/mcp-servers/:id/toggle',
+  handle(async (req, res) => {
+    const { rows } = await query<{ enabled: boolean }>(
+      `UPDATE mcp_servers SET enabled = NOT enabled, updated_at = now()
+        WHERE id = $1 RETURNING enabled`,
+      [req.params['id']],
+    );
+    if (!rows[0]) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.json({ enabled: rows[0].enabled });
+  }),
+);
+
+adminRouter.delete(
+  '/mcp-servers/:id',
+  handle(async (req, res) => {
+    // The site's own server is not removable: without it the search has no
+    // corpus, and that is a confusing way to break the front page.
+    const { rowCount } = await query('DELETE FROM mcp_servers WHERE id = $1 AND NOT is_self', [
+      req.params['id'],
+    ]);
+    res.status(rowCount ? 200 : 400).json({
+      deleted: (rowCount ?? 0) > 0,
+      ...(rowCount ? {} : { message: 'The local corpus server cannot be removed.' }),
+    });
+  }),
+);
+
+/** What every enabled server currently offers — one place to see the surface. */
+adminRouter.get(
+  '/mcp-servers/tools',
+  handle(async (req, res) => {
+    const servers = await listServers();
+    const results = [];
+    for (const server of servers) {
+      results.push({ slug: server.slug, name: server.name, ...(await testServer(server.id, baseUrlOf(req))) });
+    }
+    res.json({ servers: results });
   }),
 );

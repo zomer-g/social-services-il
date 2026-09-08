@@ -34,6 +34,10 @@ interface Strings {
   smartNoKey: string;
   smartError: string;
   smartBackToPlain: string;
+  deepAction: string;
+  deepHint: string;
+  deepSources: string;
+  deepUnavailable: (names: string) => string;
   a11yTitle: string;
   a11yLink: string;
   nearMe: string;
@@ -120,6 +124,10 @@ const he: Strings = {
   smartNoKey: 'החיפוש החכם אינו זמין כרגע. החיפוש הרגיל עובד כרגיל.',
   smartError: 'משהו השתבש בחיפוש החכם. אפשר לנסות את החיפוש הרגיל.',
   smartBackToPlain: 'לחיפוש הרגיל',
+  deepAction: 'חיפוש בכל המקורות',
+  deepHint: 'מצרף גם מקורות חיצוניים — למשל כדי לבדוק אם עמותה עדיין רשומה. איטי יותר.',
+  deepSources: 'מקורות שנבדקו',
+  deepUnavailable: (names) => `מקורות שלא הגיבו: ${names}`,
   a11yTitle: 'הצהרת נגישות',
   a11yLink: 'נגישות',
   nearMe: 'לפי המיקום שלי',
@@ -207,6 +215,10 @@ const ar: Strings = {
   smartNoKey: 'البحث الذكي غير متاح حالياً. البحث العادي يعمل كالمعتاد.',
   smartError: 'حدث خطأ في البحث الذكي. يمكنكم تجربة البحث العادي.',
   smartBackToPlain: 'إلى البحث العادي',
+  deepAction: 'بحث في كل المصادر',
+  deepHint: 'يضم مصادر خارجية أيضاً — مثلاً للتحقق ممّا إذا كانت الجمعية ما زالت مسجّلة. أبطأ.',
+  deepSources: 'المصادر التي فُحصت',
+  deepUnavailable: (names) => `مصادر لم تستجب: ${names}`,
   a11yTitle: 'بيان إمكانية الوصول',
   a11yLink: 'إمكانية الوصول',
   nearMe: 'حسب موقعي',
@@ -294,6 +306,10 @@ const ru: Strings = {
   smartNoKey: 'Умный поиск сейчас недоступен. Обычный поиск работает.',
   smartError: 'Умный поиск не сработал. Попробуйте обычный поиск.',
   smartBackToPlain: 'К обычному поиску',
+  deepAction: 'Поиск по всем источникам',
+  deepHint: 'Обращается и к внешним источникам — например, чтобы проверить регистрацию организации. Медленнее.',
+  deepSources: 'Проверенные источники',
+  deepUnavailable: (names) => `Источники без ответа: ${names}`,
   a11yTitle: 'Заявление о доступности',
   a11yLink: 'Доступность',
   nearMe: 'Рядом со мной',
@@ -381,6 +397,10 @@ const en: Strings = {
   smartNoKey: 'Smart search is not available right now. Ordinary search works as usual.',
   smartError: 'Smart search did not work. Please try the ordinary search.',
   smartBackToPlain: 'Back to ordinary search',
+  deepAction: 'Search all sources',
+  deepHint: 'Also reaches external sources — for example to check whether a charity is still registered. Slower.',
+  deepSources: 'Sources checked',
+  deepUnavailable: (names) => `Sources that did not respond: ${names}`,
   a11yTitle: 'Accessibility statement',
   a11yLink: 'Accessibility',
   nearMe: 'Near me',

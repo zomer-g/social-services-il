@@ -27,7 +27,7 @@ import { CORPUS_INSTRUCTIONS, sharedTools, toolsByName } from '../tools.js';
  */
 export const smartRouter: Router = Router();
 
-const MODEL = 'claude-opus-5';
+export const MODEL = 'claude-opus-5';
 
 /**
  * A public endpoint that costs money per call needs a ceiling. Held in memory
@@ -37,7 +37,7 @@ const MODEL = 'claude-opus-5';
 const RATE_LIMIT_PER_HOUR = 20;
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
-function overLimit(key: string): boolean {
+export function overLimit(key: string): boolean {
   const now = Date.now();
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt < now) {
@@ -54,7 +54,7 @@ setInterval(() => {
   for (const [key, bucket] of buckets) if (bucket.resetAt < now) buckets.delete(key);
 }, 600_000).unref();
 
-const RequestSchema = z.object({
+export const RequestSchema = z.object({
   q: z.string().min(2).max(500),
   lat: z.number().min(-90).max(90).optional(),
   lon: z.number().min(-180).max(180).optional(),
@@ -93,7 +93,7 @@ const anthropicTools: Anthropic.Tool[] = sharedTools.map((tool) => ({
   input_schema: z.toJSONSchema(z.object(tool.schema)) as Anthropic.Tool.InputSchema,
 }));
 
-interface Interpretation {
+export interface Interpretation {
   responses: { id: string; name: string }[];
   situations: { id: string; name: string }[];
   city?: string;
@@ -235,7 +235,7 @@ async function handle(req: Request, res: Response): Promise<void> {
  * Pulls the card ids and the categories out of whatever the tools returned, so
  * the page can show real cards and tell the person what was understood.
  */
-function collect(
+export function collect(
   out: unknown,
   toolName: string,
   input: unknown,
@@ -268,7 +268,7 @@ function collect(
   }
 }
 
-async function loadCards(
+export async function loadCards(
   ids: string[],
   lang: string,
   lat?: number,

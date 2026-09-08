@@ -65,6 +65,7 @@ function Shell() {
           <Route path="/s/:cardId" element={<ServicePage lang={lang} />} />
           <Route path="/saved" element={<SavedPage lang={lang} />} />
           <Route path="/smart" element={<SmartPage lang={lang} />} />
+          <Route path="/deep" element={<SmartPage lang={lang} deep />} />
           <Route path="/accessibility" element={<AccessibilityPage lang={lang} />} />
           <Route path="/developers" element={<DevelopersPage />} />
           <Route path="*" element={<HomePage lang={lang} />} />
