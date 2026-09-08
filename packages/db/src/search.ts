@@ -132,8 +132,13 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
       where.push(`c.search_doc @@ ssil_tsquery(${term}, true)`);
       textRank = `ts_rank_cd(c.search_doc, ssil_tsquery(${term}, true), 32)`;
     } else {
-      where.push(`c.search_text % ssil_normalize(${term})`);
-      trgm = `similarity(c.search_text, ssil_normalize(${term}))`;
+      // word_similarity, not similarity. Plain `%` compares whole strings, so a
+      // six-character query against a four-hundred-character document scores
+      // near zero and a misspelling is never rescued. `<%` scores the query
+      // against the closest word in the document, which is the question being
+      // asked. The index applies to the right-hand side.
+      where.push(`ssil_normalize(${term}) <% c.search_text`);
+      trgm = `word_similarity(ssil_normalize(${term}), c.search_text)`;
     }
   }
 

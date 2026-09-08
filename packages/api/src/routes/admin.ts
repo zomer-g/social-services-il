@@ -162,6 +162,7 @@ adminRouter.get(
          (ssil_tsquery($1, true) IS NULL)        AS tsquery_is_null,
          (SELECT count(*)::int FROM cards WHERE search_doc @@ ssil_tsquery($1, true)) AS fts_matches,
          (SELECT count(*)::int FROM cards WHERE search_text % ssil_normalize($1))     AS trigram_matches,
+         (SELECT count(*)::int FROM cards WHERE ssil_normalize($1) <% search_text)    AS word_trigram_matches,
          (SELECT count(*)::int FROM cards)       AS total_cards,
          current_setting('pg_trgm.similarity_threshold', true) AS trigram_threshold`,
       [term],
@@ -170,7 +171,8 @@ adminRouter.get(
     const sample = await query(
       `SELECT card_id, service_name, left(search_text, 160) AS search_text,
               ts_rank_cd(search_doc, ssil_tsquery($1, true), 32) AS text_rank,
-              similarity(search_text, ssil_normalize($1)) AS trgm
+              similarity(search_text, ssil_normalize($1)) AS trgm,
+              word_similarity(ssil_normalize($1), search_text) AS word_trgm
          FROM cards
         ORDER BY text_rank DESC NULLS LAST
         LIMIT 5`,
