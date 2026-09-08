@@ -68,8 +68,18 @@ export interface SearchResultCard {
   situation_ids: string[];
   score: number;
   distance_m: number | null;
-  /** How many further cards this one stands for after collapsing. */
-  also_offered_by: number;
+  /**
+   * Other places this same service is delivered, after collapsing. Usually
+   * other branches of the same organization.
+   */
+  also_available_at: number;
+  /**
+   * Other organizations offering something with the same name and description.
+   * Distinct from the count above: "twelve branches of one charity" and "twelve
+   * different charities" are different facts, and only the second is what the
+   * phrase "also offered by" ought to mean.
+   */
+  other_organizations: number;
   updated_at: string;
 }
 
@@ -209,15 +219,25 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
           + ${proximity} AS rank
       FROM filtered f
     ),
+    ${
+      collapse
+        ? `group_orgs AS (
+      SELECT collapse_key, count(DISTINCT organization_id) AS n_orgs
+      FROM ranked GROUP BY collapse_key
+    ),`
+        : ''
+    }
     grouped AS (
       SELECT r.*,
         ${
           collapse
             ? `row_number() OVER (PARTITION BY r.collapse_key ORDER BY r.rank DESC, r.score DESC) AS dup_rank,
-             count(*) OVER (PARTITION BY r.collapse_key) AS dup_count`
-            : '1::bigint AS dup_rank, 1::bigint AS dup_count'
+             count(*) OVER (PARTITION BY r.collapse_key) AS dup_count,
+             go.n_orgs`
+            : '1::bigint AS dup_rank, 1::bigint AS dup_count, 1::bigint AS n_orgs'
         }
       FROM ranked r
+      ${collapse ? 'JOIN group_orgs go ON go.collapse_key = r.collapse_key' : ''}
     ),
     visible AS (
       SELECT * FROM grouped WHERE dup_rank = 1
@@ -237,7 +257,8 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
                 v.national_service, v.location_accurate, v.phone_numbers,
                 v.response_ids, v.situation_ids, v.score,
                 round(v.distance_m)::int AS distance_m,
-                (v.dup_count - 1)::int AS also_offered_by,
+                (v.dup_count - 1)::int AS also_available_at,
+                (v.n_orgs - 1)::int AS other_organizations,
                 v.updated_at, v.rank
          FROM visible v
          ORDER BY v.rank DESC, v.score DESC, v.card_id

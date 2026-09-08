@@ -22,7 +22,8 @@ export interface Card {
   situation_ids: string[];
   score: number;
   distance_m: number | null;
-  also_offered_by: number;
+  also_available_at: number;
+  other_organizations: number;
   updated_at: string;
 }
 

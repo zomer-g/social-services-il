@@ -58,6 +58,7 @@ interface Strings {
   approximateLocation: string;
   distanceAway: (km: string) => string;
   alsoOfferedBy: (n: number) => string;
+  alsoAvailableAt: (n: number) => string;
   branches: (n: number) => string;
   call: string;
   whatsapp: string;
@@ -134,6 +135,7 @@ const he: Strings = {
   approximateLocation: 'המיקום המוצג משוער — כדאי לוודא בטלפון',
   distanceAway: (km) => `${km} ק״מ ממך`,
   alsoOfferedBy: (n) => (n === 1 ? 'ארגון נוסף מפעיל שירות דומה' : `עוד ${n} ארגונים מפעילים שירות דומה`),
+  alsoAvailableAt: (n) => (n === 1 ? 'זמין גם במקום אחד נוסף' : `זמין גם ב־${n} מקומות נוספים`),
   branches: (n) => (n === 1 ? 'סניף אחד' : `${n} סניפים`),
   call: 'חיוג',
   whatsapp: 'וואטסאפ',
@@ -211,6 +213,7 @@ const ar: Strings = {
   approximateLocation: 'الموقع المعروض تقريبي — يُفضّل التأكد هاتفياً',
   distanceAway: (km) => `${km} كم عنك`,
   alsoOfferedBy: (n) => (n === 1 ? 'جمعية أخرى تقدّم خدمة مشابهة' : `${n} جمعيات أخرى تقدّم خدمة مشابهة`),
+  alsoAvailableAt: (n) => (n === 1 ? 'متاح أيضاً في مكان آخر' : `متاح أيضاً في ${n} أماكن أخرى`),
   branches: (n) => (n === 1 ? 'فرع واحد' : `${n} فروع`),
   call: 'اتصال',
   whatsapp: 'واتساب',
@@ -288,6 +291,7 @@ const ru: Strings = {
   approximateLocation: 'Точка показана приблизительно — лучше уточнить по телефону',
   distanceAway: (km) => `${km} км от вас`,
   alsoOfferedBy: (n) => `Ещё ${n} организаций предлагают похожее`,
+  alsoAvailableAt: (n) => `Ещё в ${n} местах`,
   branches: (n) => `${n} отделений`,
   call: 'Позвонить',
   whatsapp: 'WhatsApp',
@@ -365,6 +369,7 @@ const en: Strings = {
   approximateLocation: 'This location is approximate — please confirm by phone',
   distanceAway: (km) => `${km} km away`,
   alsoOfferedBy: (n) => (n === 1 ? '1 more organisation offers something similar' : `${n} more organisations offer something similar`),
+  alsoAvailableAt: (n) => (n === 1 ? 'Also available at 1 other place' : `Also available at ${n} other places`),
   branches: (n) => (n === 1 ? '1 branch' : `${n} branches`),
   call: 'Call',
   whatsapp: 'WhatsApp',

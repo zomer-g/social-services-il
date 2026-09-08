@@ -44,7 +44,11 @@ export function ActionCard({
           </>
         )}
         <span>{card.organization_short_name ?? card.organization_name}</span>
-        {card.also_offered_by > 0 && <span>{t.alsoOfferedBy(card.also_offered_by)}</span>}
+        {card.other_organizations > 0 ? (
+          <span>{t.alsoOfferedBy(card.other_organizations)}</span>
+        ) : (
+          card.also_available_at > 0 && <span>{t.alsoAvailableAt(card.also_available_at)}</span>
+        )}
       </div>
 
       {/* A pin that is only a city centroid must say so. Sending someone to the

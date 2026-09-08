@@ -151,13 +151,18 @@ async function main() {
 
   console.log('\ncollapsing');
   {
-    const collapsed = await get('/api/v1/search', { q: 'סלי מזון' });
-    const expanded = await get('/api/v1/search', { q: 'סלי מזון', collapse: 'false' });
-    check('collapsing reduces duplicates', (collapsed.body?.total ?? 0) <= (expanded.body?.total ?? 0),
-      `${collapsed.body?.total} vs ${expanded.body?.total}`);
-    const withDupes = (collapsed.body?.cards ?? []).find((c) => c.also_offered_by > 0);
-    check('a collapsed row reports how many it stands for', withDupes !== undefined,
-      'no card reported also_offered_by > 0');
+    const collapsed = await get('/api/v1/search', { limit: 1 });
+    const expanded = await get('/api/v1/search', { collapse: 'false', limit: 1 });
+    check('collapsing merges duplicates across the corpus',
+      (collapsed.body?.total ?? 0) < (expanded.body?.total ?? 0) / 2,
+      `${collapsed.body?.total} collapsed vs ${expanded.body?.total} raw`);
+
+    // One service in this corpus is delivered at four thousand places; the
+    // collapsed row has to say so, or it reads as a single site.
+    const many = await get('/api/v1/search', { q: 'צהרון', limit: 20 });
+    const withPlaces = (many.body?.cards ?? []).find((c) => c.also_available_at > 0);
+    check('a collapsed row says how many other places offer it', withPlaces !== undefined,
+      (many.body?.cards ?? []).map((c) => `${c.service_name}:${c.also_available_at}`).slice(0, 3).join(', '));
   }
 
   console.log('\nfacets describe the result set');

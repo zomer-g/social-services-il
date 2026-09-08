@@ -100,6 +100,8 @@ function buildServer(): McpServer {
           // Passed through so an assistant can say how fresh the record is
           // rather than implying it is current.
           last_updated: c.updated_at,
+          also_available_at: c.also_available_at || undefined,
+          other_organizations: c.other_organizations || undefined,
           url: `/s/${c.card_id}`,
         })),
         narrow_by: {
