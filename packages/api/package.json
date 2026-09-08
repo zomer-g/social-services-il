@@ -1,0 +1,25 @@
+{
+  "name": "@ssil/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "node --watch dist/server.js"
+  },
+  "dependencies": {
+    "@ssil/core": "*",
+    "@ssil/db": "*",
+    "@ssil/ingest": "*",
+    "compression": "1.8.1",
+    "cors": "2.8.5",
+    "express": "5.1.0",
+    "helmet": "8.1.0"
+  },
+  "devDependencies": {
+    "@types/compression": "1.8.1",
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.3"
+  }
+}

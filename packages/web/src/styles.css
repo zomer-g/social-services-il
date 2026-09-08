@@ -1,0 +1,41 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfd;
+  --fg: #16181d;
+  --muted: #5a6070;
+  --accent: #1c3f94;
+  --card: #ffffff;
+  --border: #e2e5ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101218;
+    --fg: #eceef4;
+    --muted: #9aa2b4;
+    --accent: #93b0ff;
+    --card: #181b23;
+    --border: #2a2f3b;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}
+.shell { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+h1 { font-size: 1.75rem; margin: 0 0 0.5rem; }
+.lede { color: var(--muted); margin: 0 0 2rem; }
+.status {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+.status h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0; }
+dl > div { display: contents; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+.err { color: #c0392b; }

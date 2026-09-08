@@ -1,0 +1,27 @@
+{
+  "name": "social-services-il",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open platform for Israel's social services: public site, admin, documented API and MCP server",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "workspaces": [
+    "packages/core",
+    "packages/db",
+    "packages/ingest",
+    "packages/api",
+    "packages/web",
+    "packages/admin"
+  ],
+  "scripts": {
+    "build": "npm run build -w @ssil/core && npm run build -w @ssil/db && npm run build -w @ssil/ingest && npm run build -w @ssil/api && npm run build -w @ssil/web && npm run build -w @ssil/admin",
+    "dev": "npm run dev -w @ssil/api",
+    "migrate": "node packages/db/dist/migrate.js",
+    "typecheck": "tsc -b --pretty",
+    "test": "node --test packages/*/dist/**/*.test.js"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.18.8"
+  }
+}
