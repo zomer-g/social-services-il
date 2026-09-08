@@ -38,6 +38,7 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 | --- | --- |
 | Public site | Hebrew, Arabic, Russian and English; mobile-first; results actionable without opening them; urgent helplines outside the ranked results; WCAG 2.2 AAA |
 | Smart search | A sentence instead of a keyword, resolved to categories through the same tools MCP exposes |
+| All-sources search | The site as an MCP **client**: registered servers are discovered at request time, so another corpus becomes searchable by adding a URL |
 | Search | Hebrew normalisation with prefix variants, synonyms, facets, distance ranking, collapsing, and a misspelling fallback. Free text answers in 95–300 ms |
 | Read API | Documented and versioned, with bulk NDJSON export and `updated_since` |
 | Write API | Idempotent push, `dry_run`, per-item errors and warnings, trust-based publish or review |
@@ -169,6 +170,13 @@ A few decisions are load-bearing and easy to undo by accident:
 - **The tools are defined once**, in `packages/api/src/tools.ts`, and shared by
   the MCP server and smart search, so an assistant and the site's own search
   cannot answer the same question differently.
+- **MCP is used in both directions.** The site publishes a server, and is also a
+  client of a registry of servers (`mcp_servers`). Pointing the client at our own
+  server buys nothing on its own — same tools, longer path — and it is not
+  claimed to. It is there so that the local corpus and an external one are
+  reached by the same mechanism, and so a second source is a URL in the admin
+  rather than an integration. The all-sources button only appears once a second
+  server is enabled.
 - **Contrast is checked, not eyeballed.** `npm run check:contrast` fails the
   build's palette if any pair drops below AAA; the first palette failed six of
   thirteen pairs, all in the 5:1–7:1 range that looks fine.
