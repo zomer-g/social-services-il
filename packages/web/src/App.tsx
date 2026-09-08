@@ -25,8 +25,13 @@ function Shell() {
 
   // A screen reader gets no announcement from a client-side navigation unless
   // focus is moved, so each page change resets focus to the top of the content.
+  //
+  // preventScroll matters: focusing the element scrolls it into view, which put
+  // the first heading underneath the sticky header and made the page look as if
+  // it were missing its title.
   useEffect(() => {
-    document.getElementById('main')?.focus();
+    document.getElementById('main')?.focus({ preventScroll: true });
+    window.scrollTo(0, 0);
   }, [location.pathname]);
 
   const langLink = (path: string) => `${path}${path.includes('?') ? '&' : '?'}lang=${lang}`;

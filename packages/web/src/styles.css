@@ -426,3 +426,22 @@ a { color: var(--accent); }
   body { font-size: 17px; }
   .needs { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* Facets, grouped by axis. "Housing" as a kind of service and "housing" as a
+   circumstance are different filters, and mixing them in one row made them look
+   like the same one. */
+.facetgroup { margin: 0.75rem 0; }
+.facetlabel {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.25rem;
+}
+.facetgroup .chips { margin: 0; }
+
+/* The site name is two long words in Hebrew and wraps on a narrow phone,
+   pushing the whole page down. */
+.brand { line-height: 1.15; }
+@media (max-width: 26rem) {
+  .brand { font-size: 0.9rem; }
+}

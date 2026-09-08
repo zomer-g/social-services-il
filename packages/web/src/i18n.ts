@@ -71,6 +71,8 @@ interface Strings {
   suitableFor: string;
   whatYouGet: string;
   conditions: string;
+  practicalInfo: string;
+  resultsHeading: string;
   free: string;
   paymentRequired: string;
   howToApply: string;
@@ -145,6 +147,8 @@ const he: Strings = {
   suitableFor: 'מתאים עבור',
   whatYouGet: 'מה מקבלים',
   conditions: 'תנאים',
+  practicalInfo: 'איך מקבלים',
+  resultsHeading: 'תוצאות החיפוש',
   free: 'ללא תשלום',
   paymentRequired: 'כרוך בתשלום',
   howToApply: 'איך פונים',
@@ -157,7 +161,7 @@ const he: Strings = {
   reportErrorBody: 'מה לא נכון? למשל: הטלפון לא עונה, הכתובת השתנתה, השירות נסגר.',
   reportErrorSend: 'שליחה',
   reportErrorThanks: 'תודה, הדיווח התקבל ויטופל.',
-  myFolder: 'מה ששמרתי',
+  myFolder: 'שמורים',
   myFolderEmpty: 'עוד לא שמרת שירותים',
   myFolderBody: 'אפשר לשמור שירותים כדי לחזור אליהם, או לשלוח את הרשימה למישהו.',
   remove: 'הסרה',
@@ -220,6 +224,8 @@ const ar: Strings = {
   suitableFor: 'مناسبة لـ',
   whatYouGet: 'ما الذي تحصل عليه',
   conditions: 'الشروط',
+  practicalInfo: 'كيف تحصل عليها',
+  resultsHeading: 'نتائج البحث',
   free: 'بدون مقابل',
   paymentRequired: 'مقابل رسوم',
   howToApply: 'كيفية التقديم',
@@ -232,7 +238,7 @@ const ar: Strings = {
   reportErrorBody: 'ما هو الخطأ؟ مثلاً: الهاتف لا يجيب، العنوان تغيّر، الخدمة أُغلقت.',
   reportErrorSend: 'إرسال',
   reportErrorThanks: 'شكراً، تم استلام البلاغ.',
-  myFolder: 'ما حفظته',
+  myFolder: 'المحفوظة',
   myFolderEmpty: 'لم تحفظ خدمات بعد',
   myFolderBody: 'يمكنك حفظ خدمات للعودة إليها، أو إرسال القائمة لشخص آخر.',
   remove: 'إزالة',
@@ -295,6 +301,8 @@ const ru: Strings = {
   suitableFor: 'Подходит для',
   whatYouGet: 'Что вы получите',
   conditions: 'Условия',
+  practicalInfo: 'Как получить',
+  resultsHeading: 'Результаты поиска',
   free: 'Бесплатно',
   paymentRequired: 'Платно',
   howToApply: 'Как обратиться',
@@ -370,6 +378,8 @@ const en: Strings = {
   suitableFor: 'Suitable for',
   whatYouGet: 'What you get',
   conditions: 'Conditions',
+  practicalInfo: 'How to get it',
+  resultsHeading: 'Search results',
   free: 'Free',
   paymentRequired: 'There is a charge',
   howToApply: 'How to apply',

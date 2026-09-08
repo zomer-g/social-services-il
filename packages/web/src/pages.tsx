@@ -232,6 +232,7 @@ export function ResultsPage({ lang }: { lang: Lang }) {
 
   return (
     <>
+      <h1 className="visually-hidden">{t.resultsHeading}</h1>
       <div className="resultbar">
         <strong>{t.resultsCount(total)}</strong>
         {city && <span>· {city}</span>}
@@ -252,22 +253,32 @@ export function ResultsPage({ lang }: { lang: Lang }) {
         )}
       </div>
 
-      {usefulFacets.length > 0 && (
-        <div className="chips" role="group" aria-label={t.filters}>
-          {usefulFacets.map((f) => (
-            <button
-              key={`${f.axis}:${f.id}`}
-              type="button"
-              className="chip"
-              aria-pressed={active.has(f.id)}
-              onClick={() => toggleFacet(f.axis, f.id)}
-            >
-              {f.name}
-              <span className="count">{f.count}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {(['response', 'situation'] as const).map((axis) => {
+        const group = usefulFacets.filter((f) => f.axis === axis);
+        if (group.length === 0) return null;
+        const label = axis === 'response' ? t.whatKind : t.whoFor;
+        return (
+          <div key={axis} className="facetgroup">
+            <span className="facetlabel" id={`facet-${axis}`}>
+              {label}
+            </span>
+            <div className="chips" role="group" aria-labelledby={`facet-${axis}`}>
+              {group.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="chip"
+                  aria-pressed={active.has(f.id)}
+                  onClick={() => toggleFacet(f.axis, f.id)}
+                >
+                  {f.name}
+                  <span className="count">{f.count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
 
       {error && <p className="notice">{error}</p>}
 
@@ -374,7 +385,7 @@ export function ServicePage({ lang }: { lang: Lang }) {
 
       {card.service_details && (
         <section>
-          <h2>{t.conditions}</h2>
+          <h2>{t.practicalInfo}</h2>
           <p>{card.service_details}</p>
         </section>
       )}
