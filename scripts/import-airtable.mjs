@@ -1,30 +1,40 @@
 #!/usr/bin/env node
 /**
- * Imports the six-table export (Organizations, Branches, Services, Locations,
- * Responses, Situations) into a running instance.
+ * Imports the six-table export — Organizations, Branches, Services, Locations,
+ * Responses, Situations — into a running instance.
  *
  *   node scripts/import-airtable.mjs <directory> [options]
  *
  *   --url <base>        target instance (default http://localhost:3000)
  *   --key <api-key>     ingest key; or set INGEST_KEY
+ *   --admin <token>     admin token, needed for --taxonomy
+ *   --taxonomy          import the Responses/Situations tables first
+ *   --services          import services (default when neither flag is given)
  *   --dry-run           report what would change, write nothing
  *   --limit <n>         only the first n services, for a trial run
- *   --batch <n>         services per request (default 100)
  *   --out <file>        write the converted payload to a file instead of pushing
+ *   --report <file>     write per-item results to a file
  *
- * It pushes through the public write API rather than reaching into the database,
- * so the import is exercised by the same validation, attribution and audit trail
- * as any other source — and can be pointed at a staging instance first.
+ * It pushes through the public write API rather than reaching into the
+ * database, so the import is subject to the same validation, attribution and
+ * audit trail as any other source, and can be aimed at a staging instance first.
  *
  * Files are matched by their columns, not their names, because exports get
  * renamed. Run with --out first and read the result before pushing anything.
  */
 
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { readdir, writeFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
-const dir = args.find((a) => !a.startsWith('--'));
+const dir = args.find((a) => !a.startsWith('--') && !isOptionValue(a));
+
+function isOptionValue(value) {
+  const i = args.indexOf(value);
+  return i > 0 && args[i - 1].startsWith('--');
+}
 const opt = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : fallback;
@@ -32,140 +42,148 @@ const opt = (name, fallback) => {
 const flag = (name) => args.includes(`--${name}`);
 
 if (!dir) {
-  console.error('Usage: node scripts/import-airtable.mjs <directory> [--url ...] [--key ...] [--dry-run] [--out file]');
+  console.error('Usage: node scripts/import-airtable.mjs <directory> [--taxonomy] [--url ...] [--key ...] [--out file]');
   process.exit(1);
 }
 
-const BASE = (opt('url', process.env.BASE_URL ?? 'http://localhost:3000')).replace(/\/$/, '');
+const BASE = opt('url', process.env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const KEY = opt('key', process.env.INGEST_KEY ?? '');
+const ADMIN = opt('admin', process.env.ADMIN_TOKEN ?? '');
 const DRY = flag('dry-run');
 const LIMIT = Number(opt('limit', '0')) || 0;
-const BATCH = Number(opt('batch', '100'));
 const OUT = opt('out', '');
+const REPORT = opt('report', '');
+const DO_TAXONOMY = flag('taxonomy');
+const DO_SERVICES = flag('services') || !DO_TAXONOMY;
+
+/**
+ * A batch is bounded by branch count rather than service count. Services are not
+ * comparable in size here: most have one branch, one has four thousand, and a
+ * fixed count of services per request produces either tiny requests or ones that
+ * exceed the body limit.
+ */
+const MAX_SERVICES_PER_BATCH = 100;
+const MAX_BRANCHES_PER_BATCH = 1500;
 
 /* ------------------------------------------------------------------ parsing */
 
 /**
- * CSV reader that handles quoted fields, embedded commas and newlines, and
- * doubled quotes. Written out rather than pulled in, because the import must
- * work from a checkout with no install step, and this is the whole of what a
- * spreadsheet export needs.
+ * Streaming CSV reader.
+ *
+ * Streamed rather than read whole because the services table alone is 42 MB, and
+ * character-by-character work over a string that size is both slow and a large
+ * transient allocation. Handles quoted fields, embedded commas and newlines, and
+ * doubled quotes; written out rather than pulled in so the import works from a
+ * checkout with no install step.
  */
-function parseCsv(text) {
-  const rows = [];
+async function readCsv(path, onRow) {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  let header = null;
   let row = [];
   let field = '';
   let quoted = false;
+  let first = true;
+  let count = 0;
 
-  // A byte-order mark survives Excel exports and would otherwise become part of
-  // the first column name, so no column ever matches.
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (quoted) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i += 1;
-        } else {
-          quoted = false;
-        }
-      } else {
-        field += ch;
-      }
-      continue;
-    }
-    if (ch === '"') quoted = true;
-    else if (ch === ',') {
-      row.push(field);
-      field = '';
-    } else if (ch === '\n') {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = '';
-    } else if (ch !== '\r') {
-      field += ch;
-    }
-  }
-  if (field !== '' || row.length) {
+  const finishField = () => {
     row.push(field);
-    rows.push(row);
-  }
+    field = '';
+  };
+  const finishRow = () => {
+    finishField();
+    if (first) {
+      // A byte-order mark survives Excel exports and would otherwise become
+      // part of the first column name, so no column ever matches.
+      if (row[0]?.charCodeAt(0) === 0xfeff) row[0] = row[0].slice(1);
+      header = row.map((h) => h.trim());
+      first = false;
+    } else if (row.some((v) => v !== '')) {
+      const obj = {};
+      for (let i = 0; i < header.length; i += 1) obj[header[i]] = (row[i] ?? '').trim();
+      onRow(obj);
+      count += 1;
+    }
+    row = [];
+  };
 
-  const header = rows.shift() ?? [];
-  return rows
-    .filter((r) => r.some((v) => v.trim() !== ''))
-    .map((r) => Object.fromEntries(header.map((h, i) => [h.trim(), (r[i] ?? '').trim()])));
-}
-
-async function readTable(path) {
-  const text = await readFile(path, 'utf8');
-  if (extname(path).toLowerCase() === '.json') {
-    const parsed = JSON.parse(text);
-    // Accept both a bare array and Airtable's {records:[{fields:{...}}]} shape.
-    if (Array.isArray(parsed)) return parsed.map((r) => r.fields ?? r);
-    if (Array.isArray(parsed.records)) return parsed.records.map((r) => r.fields ?? r);
-    if (Array.isArray(parsed.data)) return parsed.data;
-    return [];
+  for await (const chunk of stream) {
+    for (let i = 0; i < chunk.length; i += 1) {
+      const ch = chunk[i];
+      if (quoted) {
+        if (ch === '"') {
+          if (chunk[i + 1] === '"') {
+            field += '"';
+            i += 1;
+          } else {
+            quoted = false;
+          }
+        } else {
+          field += ch;
+        }
+        continue;
+      }
+      if (ch === '"') quoted = true;
+      else if (ch === ',') finishField();
+      else if (ch === '\n') finishRow();
+      else if (ch !== '\r') field += ch;
+    }
   }
-  return parseCsv(text);
+  if (field !== '' || row.length) finishRow();
+  return count;
 }
 
 /* -------------------------------------------------------------- recognition */
 
-/**
- * Which table is which, decided by the columns present. Each entry lists
- * columns that together identify the table; the first match wins, so the more
- * specific signatures come first.
- */
 const SIGNATURES = [
-  { name: 'locations', required: ['id'], any: ['resolved_lat', 'resolved_lon', 'fixed_lat', 'resolved_address', 'accuracy'] },
-  { name: 'services', required: ['name'], any: ['response_ids', 'situation_ids', 'responses', 'situations', 'payment_required', 'branches'] },
-  { name: 'branches', required: [], any: ['organization', 'location', 'address_details', 'operating_unit'] },
-  { name: 'organizations', required: ['name'], any: ['short_name', 'kind', 'purpose'] },
-  { name: 'responses', required: ['id'], any: ['breadcrumbs', 'synonyms'] },
-  { name: 'situations', required: ['id'], any: ['breadcrumbs', 'synonyms'] },
+  { name: 'locations', any: ['resolved_lat', 'resolved_lon', 'fixed_lat', 'resolved_address'] },
+  { name: 'services', any: ['response_ids', 'responses_manual_ids', 'final_responses', 'name_manual'] },
+  { name: 'responses', any: ['breadcrumbs'], require: ['name_en'], not: ['category'] },
+  { name: 'situations', any: ['category'], require: ['breadcrumbs'] },
+  { name: 'branches', any: ['operating_unit', 'address_details', 'location_accuracy'] },
+  { name: 'organizations', any: ['short_name', 'purpose'] },
 ];
 
-function identify(rows) {
-  if (!rows.length) return null;
-  const cols = new Set(Object.keys(rows[0]).map((c) => c.toLowerCase()));
+function identify(header) {
+  const cols = new Set(header.map((c) => c.toLowerCase()));
   for (const sig of SIGNATURES) {
-    const hasRequired = sig.required.every((c) => cols.has(c));
-    const hasAny = sig.any.some((c) => cols.has(c));
-    if (hasRequired && hasAny) return sig.name;
+    if ((sig.require ?? []).some((c) => !cols.has(c))) continue;
+    if ((sig.not ?? []).some((c) => cols.has(c))) continue;
+    if (sig.any.some((c) => cols.has(c))) return sig.name;
   }
   return null;
 }
 
+async function headerOf(path) {
+  const rl = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+  for await (const line of rl) {
+    rl.close();
+    const clean = line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
+    // Good enough for identification: column names contain no commas here.
+    return clean.split(',').map((c) => c.replace(/^"|"$/g, '').trim());
+  }
+  return [];
+}
+
 /* ---------------------------------------------------------------- utilities */
 
-const get = (row, ...names) => {
+const val = (row, ...names) => {
   for (const n of names) {
-    for (const key of Object.keys(row)) {
-      if (key.toLowerCase() === n.toLowerCase()) {
-        const v = row[key];
-        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
-      }
-    }
+    const v = row[n];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
   }
   return undefined;
 };
 
 /**
- * Airtable writes a linked-record column as a comma or newline separated list
- * of keys, and a JSON export writes it as an array.
+ * A linked-record column holds a comma or newline separated list of ids. Only
+ * used for columns whose values are ids; a location reference is a free-text
+ * address and is never split, because 3,923 of them contain a comma.
  */
-const asList = (value) => {
-  if (value === undefined) return [];
-  if (Array.isArray(value)) return value.map(String).map((v) => v.trim()).filter(Boolean);
-  return String(value)
-    .split(/[\n,;]+/)
+const asList = (value) =>
+  (value ?? '')
+    .split(/[\n,]+/)
     .map((v) => v.trim())
     .filter(Boolean);
-};
 
 const num = (value) => {
   if (value === undefined) return undefined;
@@ -173,147 +191,274 @@ const num = (value) => {
   return Number.isFinite(n) ? n : undefined;
 };
 
+/**
+ * payment_required is yes / no / sometimes in this corpus. "Sometimes" is read
+ * as "there may be a charge": telling someone with no money that a service is
+ * free when it might not be is the more damaging of the two errors, and
+ * payment_details carries the nuance.
+ *
+ * The `boost` column is deliberately not imported. It holds values up to 300,
+ * and this system treats boost as a power of ten, so importing it verbatim
+ * would produce infinities. Editorial ranking is better re-established
+ * deliberately than inherited with unknown semantics.
+ */
 const truthy = (value) =>
-  value !== undefined && ['true', '1', 'yes', 'כן'].includes(String(value).toLowerCase());
+  value !== undefined && ['true', '1', 'yes', 'checked', 'sometimes', 'כן'].includes(String(value).toLowerCase());
 
-/* ------------------------------------------------------------------- import */
+/**
+ * The geocoders in this corpus report accuracy in their own vocabulary. Anything
+ * at street level or better can be navigated to; the rest is shown with a
+ * warning, because a pin on a city centroid misleads more than a missing pin.
+ */
+const ACCURACY = {
+  ROOFTOP: 'rooftop',
+  ADDR_V1: 'building',
+  RANGE_INTERPOLATED: 'street',
+  GEOMETRIC_CENTER: 'approximate',
+  APPROXIMATE: 'approximate',
+  POI_MID_POINT: 'approximate',
+  SETL_MID_POINT: 'locality',
+  SETL_V1: 'locality',
+  NATIONAL_SERVICE: 'unknown',
+};
 
-async function main() {
+/* ------------------------------------------------------------------ loading */
+
+async function loadTables() {
   const files = await readdir(dir);
   const tables = {};
-
   for (const file of files) {
-    if (!['.csv', '.json', '.tsv'].includes(extname(file).toLowerCase())) continue;
-    const rows = await readTable(join(dir, file));
-    const kind = identify(rows);
+    if (!['.csv', '.tsv'].includes(extname(file).toLowerCase())) continue;
+    const path = join(dir, file);
+    const kind = identify(await headerOf(path));
     if (!kind) {
-      console.warn(`  ? ${file} — could not tell which table this is, skipping (${Object.keys(rows[0] ?? {}).slice(0, 6).join(', ')})`);
+      console.warn(`  ? ${file} — could not tell which table this is, skipping`);
       continue;
     }
-    // Two files can identify as the same table (a split export); keep both.
-    tables[kind] = [...(tables[kind] ?? []), ...rows];
-    console.log(`  ${kind.padEnd(14)} ${String(rows.length).padStart(6)} rows  (${file})`);
+    tables[kind] ??= [];
+    const n = await readCsv(path, (row) => tables[kind].push(row));
+    console.log(`  ${kind.padEnd(14)} ${String(n).padStart(7)} rows  (${file})`);
+  }
+  return tables;
+}
+
+/* ----------------------------------------------------------------- taxonomy */
+
+async function importTaxonomy(tables) {
+  const nodes = [];
+  for (const [table, axis] of [['responses', 'response'], ['situations', 'situation']]) {
+    for (const row of tables[table] ?? []) {
+      const id = val(row, 'id');
+      if (!id || !id.includes(':')) continue;
+      if (val(row, 'status') === 'INACTIVE') continue;
+      nodes.push({
+        id,
+        axis,
+        name: val(row, 'name'),
+        name_en: val(row, 'name_en'),
+        description: val(row, 'description'),
+        pk: val(row, 'pk'),
+        // The synonyms are the most valuable thing in these two tables: years of
+        // editorial work, and absent from the published taxonomy file.
+        synonyms: asList(val(row, 'synonyms')),
+      });
+    }
   }
 
-  if (!tables.services?.length) {
-    console.error('\nNo services table found. Nothing to import.');
+  const synonymCount = nodes.reduce((n, x) => n + x.synonyms.length, 0);
+  console.log(`\n  ${nodes.length} taxonomy nodes, ${synonymCount} synonyms`);
+
+  if (OUT) {
+    await writeFile(OUT, JSON.stringify({ nodes }, null, 2), 'utf8');
+    console.log(`  written to ${OUT}`);
+    return;
+  }
+  if (!ADMIN) {
+    console.error('  --admin <token> is required to import the taxonomy');
     process.exit(1);
   }
 
-  // Airtable links by an opaque key column; everything is joined on it.
-  const index = (rows, ...keyNames) => {
-    const map = new Map();
-    for (const row of rows ?? []) {
-      const key = get(row, ...keyNames);
-      if (key) map.set(key, row);
-      const id = get(row, 'id');
-      if (id) map.set(id, row);
-    }
-    return map;
-  };
+  const res = await fetch(`${BASE}/api/admin/taxonomy/import`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN}` },
+    body: JSON.stringify({ nodes }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    console.error('  failed:', res.status, JSON.stringify(body).slice(0, 400));
+    process.exit(1);
+  }
+  console.log(`  imported ${body.nodes} nodes, ${body.names} names, ${body.synonyms} synonyms`);
+  for (const s of body.skipped ?? []) console.warn('  skipped:', s);
+}
 
-  const orgs = index(tables.organizations, 'key');
-  const branches = index(tables.branches, 'key');
-  const locations = index(tables.locations, 'key');
+/* ----------------------------------------------------------------- services */
 
-  console.log('\nconverting');
+function convertServices(tables) {
+  const orgs = new Map((tables.organizations ?? []).map((o) => [val(o, 'id'), o]));
+  const branches = new Map((tables.branches ?? []).map((b) => [val(b, 'id'), b]));
+  const locations = new Map((tables.locations ?? []).map((l) => [val(l, 'id'), l]));
+
   const services = [];
-  let skipped = 0;
+  const skipped = { inactive: 0, no_name: 0, no_org: 0, no_response: 0 };
 
-  for (const row of tables.services) {
-    const externalId = get(row, 'id', 'key', 'service_id');
-    const name = get(row, 'name_manual', 'name');
+  for (const row of tables.services ?? []) {
+    // Only ACTIVE records are published upstream, and importing the rest would
+    // resurrect services that were deliberately withdrawn.
+    if (val(row, 'status') !== 'ACTIVE') {
+      skipped.inactive += 1;
+      continue;
+    }
+
+    const externalId = val(row, 'id');
+    const name = val(row, 'name_manual', 'name');
     if (!externalId || !name) {
-      skipped += 1;
+      skipped.no_name += 1;
       continue;
     }
 
-    // The manual columns are the curated ones and win, which is the whole point
-    // of the export having them.
-    const responses = asList(get(row, 'responses_manual_ids') ?? get(row, 'response_ids') ?? get(row, 'responses'));
-    const situations = asList(get(row, 'situations_manual_ids') ?? get(row, 'situation_ids') ?? get(row, 'situations'));
-
-    if (!responses.length) {
-      skipped += 1;
+    // final_* are the curated result of manual tags overriding scraped ones;
+    // preferring them keeps years of editorial work that the raw columns lose.
+    const responses = asList(val(row, 'final_responses', 'responses_manual_ids', 'response_ids'));
+    const situations = asList(val(row, 'final_situations', 'situations_manual_ids', 'situation_ids'));
+    if (responses.length === 0) {
+      skipped.no_response += 1;
       continue;
     }
 
-    const orgKeys = asList(get(row, 'organizations', 'organization'));
-    const orgRow = orgKeys.map((k) => orgs.get(k)).find(Boolean);
-    const orgName = orgRow ? get(orgRow, 'name') : undefined;
-    if (!orgName) {
-      skipped += 1;
+    // The organisation is reached through the branches, not from the service.
+    // Only 207 of ~12,000 active services fill their own organizations column;
+    // for the rest the provider is a property of each place the service is
+    // delivered at, and 108 services are delivered by more than one body.
+    const branchRows = asList(val(row, 'branches'))
+      .map((id) => [id, branches.get(id)])
+      .filter(([, b]) => b && val(b, 'status') !== 'INACTIVE');
+
+    const orgIds = [
+      ...asList(val(row, 'organizations')),
+      ...branchRows.map(([, b]) => val(b, 'organization')).filter(Boolean),
+    ];
+    const primaryOrgId = orgIds.find((id) => orgs.has(id));
+    const orgRow = primaryOrgId ? orgs.get(primaryOrgId) : undefined;
+    const orgName = orgRow ? val(orgRow, 'name') : undefined;
+    if (!orgRow || !orgName) {
+      skipped.no_org += 1;
       continue;
     }
+    const orgId = primaryOrgId;
 
-    const branchKeys = asList(get(row, 'branches'));
+    const orgOf = (id) => {
+      const o = orgs.get(id);
+      const name = o ? val(o, 'name') : undefined;
+      if (!o || !name) return undefined;
+      const rawId = val(o, 'id');
+      return {
+        id: /^\d{9}$/.test(rawId ?? '') ? rawId : undefined,
+        external_id: rawId,
+        name: name.slice(0, 400),
+        short_name: val(o, 'short_name')?.slice(0, 200),
+        kind: val(o, 'kind')?.slice(0, 100),
+        purpose: val(o, 'purpose')?.slice(0, 4000),
+        description: val(o, 'description')?.slice(0, 8000),
+        phone_numbers: asList(val(o, 'phone_numbers')).slice(0, 10),
+      };
+    };
+
     const serviceBranches = [];
-    for (const key of branchKeys) {
-      const b = branches.get(key);
-      if (!b) continue;
-      const locRow = locations.get(asList(get(b, 'location'))[0] ?? '');
-      // A hand-corrected coordinate beats the geocoder's, exactly as the source
-      // pipeline treats it.
-      const lat = num(get(locRow ?? {}, 'fixed_lat')) ?? num(get(locRow ?? {}, 'resolved_lat'));
-      const lon = num(get(locRow ?? {}, 'fixed_lon')) ?? num(get(locRow ?? {}, 'resolved_lon'));
+    for (const [branchId, b] of branchRows) {
+      // Never split this: a location id is a free-text address and thousands of
+      // them contain a comma.
+      const locRow = locations.get(val(b, 'location') ?? '');
+      const rawAccuracy = val(b, 'location_accuracy') ?? val(locRow ?? {}, 'accuracy');
+      const national = rawAccuracy === 'NATIONAL_SERVICE';
+
+      // A hand-corrected coordinate beats the geocoder's, as it does upstream.
+      const lat = num(val(locRow ?? {}, 'fixed_lat')) ?? num(val(locRow ?? {}, 'resolved_lat'));
+      const lon = num(val(locRow ?? {}, 'fixed_lon')) ?? num(val(locRow ?? {}, 'resolved_lon'));
+
+      const branchOrgId = val(b, 'organization');
+      const branchOrg = branchOrgId && branchOrgId !== orgId ? orgOf(branchOrgId) : undefined;
+
       serviceBranches.push({
-        external_id: get(b, 'id', 'key') ?? key,
-        name: get(b, 'name'),
-        operating_unit: get(b, 'operating_unit'),
-        description: get(b, 'description'),
-        address: get(b, 'address'),
-        address_details: get(b, 'address_details'),
-        city: get(locRow ?? {}, 'resolved_city'),
-        ...(lat !== undefined && lon !== undefined ? { lat, lon } : {}),
-        phone_numbers: asList(get(b, 'phone_numbers')).slice(0, 10),
+        external_id: branchId,
+        name: val(b, 'name')?.slice(0, 300),
+        operating_unit: val(b, 'operating_unit')?.slice(0, 300),
+        description: val(b, 'description')?.slice(0, 4000),
+        address: val(b, 'address')?.slice(0, 500),
+        address_details: val(b, 'address_details')?.slice(0, 500),
+        city: val(b, 'branch_city') ?? val(locRow ?? {}, 'resolved_city'),
+        ...(national ? { national_service: true } : {}),
+        ...(!national && lat !== undefined && lon !== undefined ? { lat, lon } : {}),
+        location_accuracy: national ? 'unknown' : (ACCURACY[rawAccuracy] ?? 'unknown'),
+        phone_numbers: asList(val(b, 'phone_numbers')).slice(0, 10),
+        ...(branchOrg ? { organization: branchOrg } : {}),
       });
     }
 
     services.push({
       external_id: externalId,
-      name,
-      description: get(row, 'description'),
-      details: get(row, 'details'),
-      payment_required: truthy(get(row, 'payment_required')),
-      payment_details: get(row, 'payment_details'),
-      phone_numbers: asList(get(row, 'phone_numbers')).slice(0, 10),
-      email_address: get(row, 'email_address'),
-      implements: get(row, 'implements'),
+      name: name.slice(0, 400),
+      description: val(row, 'description')?.slice(0, 8000),
+      details: val(row, 'details')?.slice(0, 8000),
+      payment_required: truthy(val(row, 'payment_required')),
+      payment_details: val(row, 'payment_details')?.slice(0, 2000),
+      phone_numbers: asList(val(row, 'phone_numbers')).slice(0, 10),
+      implements: val(row, 'implements')?.slice(0, 500),
       responses,
       situations,
-      organization: {
-        id: get(orgRow, 'id')?.match(/^\d{9}$/) ? get(orgRow, 'id') : undefined,
-        external_id: get(orgRow, 'id', 'key'),
-        name: orgName,
-        short_name: get(orgRow, 'short_name'),
-        kind: get(orgRow, 'kind'),
-        purpose: get(orgRow, 'purpose'),
-        description: get(orgRow, 'description'),
-        phone_numbers: asList(get(orgRow, 'phone_numbers')).slice(0, 10),
-      },
+      organization: orgOf(orgId),
       branches: serviceBranches,
     });
 
     if (LIMIT && services.length >= LIMIT) break;
   }
 
-  console.log(`  ${services.length} services converted, ${skipped} skipped (no name, no organisation, or no response tag)`);
+  return { services, skipped };
+}
+
+function* batches(services) {
+  let batch = [];
+  let branchCount = 0;
+  for (const service of services) {
+    const n = service.branches.length;
+    if (batch.length && (batch.length >= MAX_SERVICES_PER_BATCH || branchCount + n > MAX_BRANCHES_PER_BATCH)) {
+      yield batch;
+      batch = [];
+      branchCount = 0;
+    }
+    batch.push(service);
+    branchCount += n;
+  }
+  if (batch.length) yield batch;
+}
+
+async function importServices(tables) {
+  const { services, skipped } = convertServices(tables);
+  const branchTotal = services.reduce((n, s) => n + s.branches.length, 0);
+  console.log(
+    `\n  ${services.length} services converted (${branchTotal} service-branch pairs)\n` +
+      `  skipped: ${skipped.inactive} inactive, ${skipped.no_response} with no response tag, ` +
+      `${skipped.no_org} with no organisation, ${skipped.no_name} with no name`,
+  );
 
   if (OUT) {
     await writeFile(OUT, JSON.stringify({ services }, null, 2), 'utf8');
-    console.log(`\nWritten to ${OUT}. Read it before pushing.`);
+    console.log(`  written to ${OUT}. Read it before pushing.`);
     return;
   }
-
   if (!KEY) {
-    console.error('\nNo ingest key. Pass --key or set INGEST_KEY, or use --out to inspect the conversion first.');
+    console.error('  no ingest key. Pass --key, set INGEST_KEY, or use --out to inspect first.');
     process.exit(1);
   }
 
-  console.log(`\n${DRY ? 'dry run against' : 'pushing to'} ${BASE}`);
+  console.log(`\n  ${DRY ? 'dry run against' : 'pushing to'} ${BASE}`);
   const totals = {};
-  for (let i = 0; i < services.length; i += BATCH) {
-    const batch = services.slice(i, i + BATCH);
+  const problems = [];
+  let n = 0;
+  const started = Date.now();
+
+  for (const batch of batches(services)) {
+    n += 1;
     const res = await fetch(`${BASE}/api/v1/ingest/services`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${KEY}` },
@@ -322,23 +467,62 @@ async function main() {
     const body = await res.json().catch(() => null);
 
     if (!res.ok && !body?.results) {
-      console.error(`  batch ${i / BATCH + 1}: HTTP ${res.status}`, JSON.stringify(body).slice(0, 400));
+      console.error(`  batch ${n}: HTTP ${res.status} ${JSON.stringify(body).slice(0, 300)}`);
+      problems.push({ batch: n, status: res.status, body });
       continue;
     }
 
-    for (const [status, n] of Object.entries(body.summary ?? {})) {
-      totals[status] = (totals[status] ?? 0) + n;
+    for (const [status, count] of Object.entries(body.summary ?? {})) {
+      totals[status] = (totals[status] ?? 0) + count;
     }
-    // Rejections are the point of running this: report them as they happen so a
-    // systematic mapping error is visible on the first batch, not the last.
     for (const r of body.results ?? []) {
-      if (r.status === 'rejected') console.error(`  rejected ${r.external_id}: ${r.error}`);
+      if (r.status === 'rejected' || r.warnings) problems.push(r);
     }
-    console.log(`  batch ${i / BATCH + 1}/${Math.ceil(services.length / BATCH)}: ${JSON.stringify(body.summary)}`);
+
+    const done = Object.values(totals).reduce((a, b) => a + b, 0);
+    process.stdout.write(
+      `\r  batch ${n}: ${done}/${services.length} services, ${Math.round((Date.now() - started) / 1000)}s elapsed   `,
+    );
   }
 
-  console.log(`\ntotal: ${JSON.stringify(totals)}`);
-  if (!DRY) console.log('Run POST /api/admin/rebuild to make the new records searchable.');
+  console.log(`\n\n  total: ${JSON.stringify(totals)}`);
+
+  const rejected = problems.filter((p) => p.status === 'rejected');
+  const warned = problems.filter((p) => p.warnings);
+  if (rejected.length) {
+    console.log(`\n  ${rejected.length} rejected. First few:`);
+    for (const r of rejected.slice(0, 5)) console.log(`    ${r.external_id}: ${r.error}`);
+  }
+  if (warned.length) {
+    console.log(`\n  ${warned.length} written with warnings. First few:`);
+    for (const r of warned.slice(0, 5)) console.log(`    ${r.external_id}: ${r.warnings.join('; ')}`);
+  }
+
+  if (REPORT) {
+    await writeFile(REPORT, JSON.stringify({ totals, problems }, null, 2), 'utf8');
+    console.log(`\n  full report written to ${REPORT}`);
+  }
+  if (!DRY) console.log('\n  Run POST /api/admin/rebuild to make the new records searchable.');
+}
+
+/* --------------------------------------------------------------------- main */
+
+async function main() {
+  console.log(`reading ${dir}`);
+  const tables = await loadTables();
+
+  if (DO_TAXONOMY) {
+    console.log('\n=== taxonomy ===');
+    await importTaxonomy(tables);
+  }
+  if (DO_SERVICES) {
+    if (!tables.services?.length) {
+      console.error('\nNo services table found.');
+      process.exit(1);
+    }
+    console.log('\n=== services ===');
+    await importServices(tables);
+  }
 }
 
 main().catch((err) => {

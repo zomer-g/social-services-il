@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
-import { query } from '@ssil/db';
+import { query, transaction } from '@ssil/db';
 import { clearFixtures, loadFixtures, loadTaxonomy } from '@ssil/ingest';
 import { mintKey } from '../apikeys.js';
 import { requireRole } from '../auth.js';
@@ -512,5 +512,107 @@ adminRouter.post(
       [req.params['id'], status],
     );
     res.status(rowCount ? 200 : 404).json({ updated: (rowCount ?? 0) > 0 });
+  }),
+);
+
+/**
+ * Imports a taxonomy from an export, extending the vendored tree.
+ *
+ * The upstream YAML is not always the whole story: a working corpus carries
+ * nodes added locally, and — more valuable — the synonyms editors have built up
+ * over years. Those are what let a search for "קצבה" reach a category named
+ * "סיוע כספי", and they exist nowhere in the published taxonomy file.
+ *
+ * Parents are derived from the slug rather than trusted from the payload, since
+ * the id already encodes the hierarchy and a mismatch between the two is a
+ * silent way to lose a whole branch of the tree.
+ */
+adminRouter.post(
+  '/taxonomy/import',
+  handle(async (req, res) => {
+    const body = req.body as {
+      nodes?: {
+        id: string;
+        axis: 'response' | 'situation';
+        name?: string;
+        name_en?: string;
+        description?: string;
+        synonyms?: string[];
+        pk?: string;
+      }[];
+    };
+    const nodes = body.nodes ?? [];
+    if (nodes.length === 0) {
+      res.status(400).json({ error: 'bad_request', message: 'nodes is required' });
+      return;
+    }
+
+    const known = new Set(nodes.map((n) => n.id));
+    const existing = await query<{ id: string }>('SELECT id FROM taxonomy_nodes');
+    for (const row of existing.rows) known.add(row.id);
+
+    // Shallowest first, so a parent always exists before its children.
+    const ordered = [...nodes].sort(
+      (a, b) => a.id.split(':').length - b.id.split(':').length || a.id.localeCompare(b.id),
+    );
+
+    let created = 0;
+    let names = 0;
+    let synonyms = 0;
+    const skipped: string[] = [];
+
+    await transaction(async (client) => {
+      for (const node of ordered) {
+        const parts = node.id.split(':');
+        const parentId = parts.length > 2 ? parts.slice(0, -1).join(':') : null;
+        // A node whose parent is absent would be unreachable by any filter, so
+        // it is reported rather than attached to the root and hidden there.
+        if (parentId && !known.has(parentId)) {
+          skipped.push(`${node.id} (parent ${parentId} is missing)`);
+          continue;
+        }
+
+        await client.query(
+          `INSERT INTO taxonomy_nodes (id, axis, parent_id, depth, pk_uuid, active)
+           VALUES ($1, $2::ssil_axis, $3, $4, $5, true)
+           ON CONFLICT (id) DO UPDATE SET
+             axis = EXCLUDED.axis, parent_id = EXCLUDED.parent_id,
+             depth = EXCLUDED.depth, active = true, updated_at = now()`,
+          [node.id, node.axis, parentId, Math.max(parts.length - 2, 0), node.pk ?? null],
+        );
+        created += 1;
+
+        for (const [lang, name, description] of [
+          ['he', node.name, node.description],
+          ['en', node.name_en, undefined],
+        ] as const) {
+          if (!name) continue;
+          await client.query(
+            `INSERT INTO taxonomy_names (node_id, lang, name, description)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (node_id, lang) DO UPDATE SET
+               name = EXCLUDED.name,
+               description = COALESCE(EXCLUDED.description, taxonomy_names.description)`,
+            [node.id, lang, name, description ?? null],
+          );
+          names += 1;
+        }
+
+        for (const term of node.synonyms ?? []) {
+          if (!term.trim()) continue;
+          await client.query(
+            `INSERT INTO taxonomy_synonyms (node_id, lang, term) VALUES ($1, 'he', $2)
+             ON CONFLICT DO NOTHING`,
+            [node.id, term.trim()],
+          );
+          synonyms += 1;
+        }
+      }
+
+      await client.query('SELECT rebuild_taxonomy_closure()');
+    });
+
+    await query('SELECT refresh_taxonomy_counts()');
+    res.json({ nodes: created, names, synonyms, skipped });
   }),
 );

@@ -29,21 +29,6 @@ export const ingestRouter: Router = Router();
 
 const UrlSchema = z.object({ href: z.string().url(), title: z.string().optional() });
 
-const BranchSchema = z.object({
-  external_id: z.string().min(1).max(200),
-  name: z.string().max(300).optional(),
-  operating_unit: z.string().max(300).optional(),
-  description: z.string().max(4000).optional(),
-  address: z.string().max(500).optional(),
-  address_details: z.string().max(500).optional(),
-  city: z.string().max(200).optional(),
-  lat: z.number().min(-90).max(90).optional(),
-  lon: z.number().min(-180).max(180).optional(),
-  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
-  email_address: z.string().email().optional(),
-  urls: z.array(UrlSchema).max(10).optional(),
-});
-
 const OrganizationSchema = z.object({
   // The Israeli registration number where there is one. Supplying it is what
   // lets a record from this source meet the same organization from another.
@@ -59,6 +44,35 @@ const OrganizationSchema = z.object({
   urls: z.array(UrlSchema).max(10).optional(),
 });
 
+const BranchSchema = z.object({
+  external_id: z.string().min(1).max(200),
+  name: z.string().max(300).optional(),
+  operating_unit: z.string().max(300).optional(),
+  description: z.string().max(4000).optional(),
+  address: z.string().max(500).optional(),
+  address_details: z.string().max(500).optional(),
+  city: z.string().max(200).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lon: z.number().min(-180).max(180).optional(),
+  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
+  email_address: z.string().email().optional(),
+  urls: z.array(UrlSchema).max(10).optional(),
+  national_service: z.boolean().optional().describe('Delivered anywhere in the country; this branch has no point on the map.'),
+  location_accuracy: z
+    .enum(['rooftop', 'building', 'street', 'locality', 'region', 'approximate', 'unknown'])
+    .optional()
+    .describe('How precise the coordinate is. Anything below street level is shown with a warning.'),
+  // A branch belongs to an organization, and for a service delivered through
+  // several bodies that is not the same one throughout: a municipal programme
+  // run by four different nonprofits has four providers, and saying so is the
+  // difference between a usable phone number and a wrong one.
+  organization: z
+    .lazy(() => OrganizationSchema)
+    .optional()
+    .describe('The body running this branch, when it differs from the service-level organization.'),
+});
+
+
 const ServiceSchema = z.object({
   external_id: z.string().min(1).max(200).describe('Your id for this service. Re-sending it updates the same record.'),
   name: z.string().min(2).max(400),
@@ -73,7 +87,7 @@ const ServiceSchema = z.object({
   responses: z.array(z.string()).min(1).describe('Response taxonomy ids. At least one, or the service cannot be found.'),
   situations: z.array(z.string()).optional(),
   organization: OrganizationSchema,
-  branches: z.array(BranchSchema).max(200).optional(),
+  branches: z.array(BranchSchema).max(5000).optional(),
   national_service: z.boolean().optional().describe('True for a service with no physical location, available anywhere.'),
   status: z.enum(['draft', 'published', 'archived']).optional(),
 });
@@ -90,6 +104,8 @@ interface ItemResult {
   status: 'created' | 'updated' | 'unchanged' | 'rejected' | 'queued_for_review';
   service_id?: string;
   changes?: string[];
+  /** Things that were dropped but did not stop the record being written. */
+  warnings?: string[];
   error?: string;
 }
 
@@ -189,18 +205,32 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
   const serviceId = `${sourceSlug}:${input.external_id}`;
   const orgId = input.organization.id ?? `${sourceSlug}:org:${input.organization.external_id ?? input.organization.name}`;
 
-  // Reject unknown taxonomy ids rather than dropping them silently: a service
-  // tagged with a category that does not exist is invisible, and the caller
-  // would have no way to know.
+  // Unknown taxonomy ids are dropped and reported, not silently accepted and
+  // not fatal. A real corpus carries the occasional corrupt tag, and losing a
+  // whole service over one of them helps nobody — but a tag that vanishes
+  // without a word is how a service quietly becomes unreachable, so every drop
+  // comes back in `warnings`.
   const allTags = [...input.responses, ...(input.situations ?? [])];
   const { rows: known } = await query<{ id: string }>(
     'SELECT id FROM taxonomy_nodes WHERE id = ANY($1::text[]) AND active',
     [allTags],
   );
-  const unknown = allTags.filter((t) => !known.some((k) => k.id === t));
+  const knownIds = new Set(known.map((k) => k.id));
+  const warnings: string[] = [];
+  const unknown = allTags.filter((t) => !knownIds.has(t));
   if (unknown.length) {
+    warnings.push(`Unknown taxonomy ids dropped: ${unknown.join(', ')}`);
+  }
+
+  const responses = input.responses.filter((t) => knownIds.has(t));
+  const situations = (input.situations ?? []).filter((t) => knownIds.has(t));
+
+  // With no response left there is no route through the site to this service,
+  // so it would exist and be unreachable. That is worth failing for.
+  if (responses.length === 0) {
     throw new Error(
-      `Unknown taxonomy ids: ${unknown.join(', ')}. Use GET /api/v1/taxonomy to list valid ids.`,
+      `No valid response tags. Given: ${input.responses.join(', ') || '(none)'}. ` +
+        'Use GET /api/v1/taxonomy to list valid ids.',
     );
   }
 
@@ -225,6 +255,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
       status: before ? (changes.length ? 'updated' : 'unchanged') : 'created',
       service_id: serviceId,
       changes,
+      ...(warnings.length ? { warnings } : {}),
     };
   }
 
@@ -237,33 +268,39 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
       [ctx.sourceId, ctx.runId, input.external_id, JSON.stringify(input), contentHash(input)],
     );
 
-    await client.query(
-      `INSERT INTO organizations (id, slug, name, short_name, kind, purpose, description,
-                                  urls, phone_numbers, email_address, status, source_id, external_ids)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name, short_name = EXCLUDED.short_name, kind = EXCLUDED.kind,
-         purpose = EXCLUDED.purpose, description = EXCLUDED.description,
-         urls = EXCLUDED.urls, phone_numbers = EXCLUDED.phone_numbers,
-         email_address = EXCLUDED.email_address, status = EXCLUDED.status,
-         external_ids = organizations.external_ids || EXCLUDED.external_ids,
-         updated_at = now()`,
-      [
-        orgId,
-        orgId.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase(),
-        input.organization.name,
-        input.organization.short_name ?? null,
-        input.organization.kind ?? null,
-        input.organization.purpose ?? null,
-        input.organization.description ?? null,
-        JSON.stringify(input.organization.urls ?? []),
-        input.organization.phone_numbers ?? [],
-        input.organization.email_address ?? null,
-        status,
-        ctx.sourceId,
-        JSON.stringify(input.organization.external_id ? { [sourceSlug]: input.organization.external_id } : {}),
-      ],
-    );
+    const upsertOrganization = async (org: z.infer<typeof OrganizationSchema>): Promise<string> => {
+      const id = org.id ?? `${sourceSlug}:org:${org.external_id ?? org.name}`;
+      await client.query(
+        `INSERT INTO organizations (id, slug, name, short_name, kind, purpose, description,
+                                    urls, phone_numbers, email_address, status, source_id, external_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name, short_name = EXCLUDED.short_name, kind = EXCLUDED.kind,
+           purpose = EXCLUDED.purpose, description = EXCLUDED.description,
+           urls = EXCLUDED.urls, phone_numbers = EXCLUDED.phone_numbers,
+           email_address = EXCLUDED.email_address, status = EXCLUDED.status,
+           external_ids = organizations.external_ids || EXCLUDED.external_ids,
+           updated_at = now()`,
+        [
+          id,
+          id.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase(),
+          org.name,
+          org.short_name ?? null,
+          org.kind ?? null,
+          org.purpose ?? null,
+          org.description ?? null,
+          JSON.stringify(org.urls ?? []),
+          org.phone_numbers ?? [],
+          org.email_address ?? null,
+          status,
+          ctx.sourceId,
+          JSON.stringify(org.external_id ? { [sourceSlug]: org.external_id } : {}),
+        ],
+      );
+      return id;
+    };
+
+    await upsertOrganization(input.organization);
 
     await client.query(
       `INSERT INTO services (id, name, description, details, payment_required, payment_details,
@@ -308,8 +345,8 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
       [serviceId],
     );
     for (const [axis, ids] of [
-      ['response', input.responses],
-      ['situation', input.situations ?? []],
+      ['response', responses],
+      ['situation', situations],
     ] as const) {
       for (const nodeId of ids) {
         await client.query(
@@ -329,9 +366,10 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
       await client.query(
         `INSERT INTO locations (id, raw_address, provider, accuracy, resolved_lat, resolved_lon,
                                 resolved_address, resolved_city, national_service)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+         VALUES ($1, $2, $3, $4::ssil_accuracy, $5, $6, $7, $8, $9)
          ON CONFLICT (id) DO UPDATE SET
            raw_address = EXCLUDED.raw_address,
+           national_service = EXCLUDED.national_service,
            -- A coordinate supplied by the source only overwrites the geocoder's
            -- answer, never a correction someone made by hand.
            resolved_lat = EXCLUDED.resolved_lat, resolved_lon = EXCLUDED.resolved_lon,
@@ -341,13 +379,25 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
           locationId,
           branch.address ?? '',
           `api:${sourceSlug}`,
-          branch.lat != null ? 'building' : 'unknown',
+          branch.location_accuracy ?? (branch.lat != null ? 'building' : 'unknown'),
           branch.lat ?? null,
           branch.lon ?? null,
           branch.address ?? null,
           branch.city ?? null,
+          branch.national_service ?? false,
         ],
       );
+
+      // A branch names its own provider where it has one; otherwise it belongs
+      // to the organization that offers the service.
+      const branchOrgId = branch.organization ? await upsertOrganization(branch.organization) : orgId;
+      if (branchOrgId !== orgId) {
+        await client.query(
+          `INSERT INTO service_organizations (service_id, organization_id) VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [serviceId, branchOrgId],
+        );
+      }
 
       await client.query(
         `INSERT INTO branches (id, organization_id, location_id, name, operating_unit, description,
@@ -363,7 +413,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
            status = EXCLUDED.status, updated_at = now()`,
         [
           branchId,
-          orgId,
+          branchOrgId,
           locationId,
           branch.name ?? null,
           branch.operating_unit ?? null,
@@ -429,6 +479,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
     status: ctx.autoPublish ? (before ? (changes.length ? 'updated' : 'unchanged') : 'created') : 'queued_for_review',
     service_id: serviceId,
     changes,
+    ...(warnings.length ? { warnings } : {}),
   };
 }
 
