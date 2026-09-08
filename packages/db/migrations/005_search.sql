@@ -40,10 +40,10 @@ CREATE OR REPLACE FUNCTION ssil_strip_marks(t text) RETURNS text
   LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT translate(
     COALESCE(t, ''),
-    E'֑֖֛֚֒֓֔֕֗֘֙֜֝֞֟֠'
-    E'ְ֢֣֤֥֦֧֪֭֮֡֨֩֫֬֯'
-    E'ֱֲֳִֵֶַָֹֺֻּֽֿׁׂ'
-    E'ׇׅׄ׳״'
+    '֑֖֛֚֒֓֔֕֗֘֙֜֝֞֟֠'
+    'ְ֢֣֤֥֦֧֪֭֮֡֨֩֫֬֯'
+    'ֱֲֳִֵֶַָֹֺֻּֽֿׁׂ'
+    'ׇׅׄ׳״'
     || chr(39) || chr(34),
     ''
   );
@@ -55,13 +55,13 @@ $$;
 -- words instead of fusing into one token nothing will ever match.
 CREATE OR REPLACE FUNCTION ssil_split_marks(t text) RETURNS text
   LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT translate(COALESCE(t, ''), E'־׀׃׆‐‑‒–—―', '          ');
+  SELECT translate(COALESCE(t, ''), '־׀׃׆‐‑‒–—―', '          ');
 $$;
 
 -- Final letter forms folded to their medial form, so סניף and סניפים agree.
 CREATE OR REPLACE FUNCTION ssil_fold_finals(t text) RETURNS text
   LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT translate(t, E'ךםןףץ', E'כמנפצ');
+  SELECT translate(t, 'ךםןףץ', 'כמנפצ');
 $$;
 
 -- Strips one leading particle (ו/ב/ל/כ/ה/מ/ש), but only when at least three
@@ -72,7 +72,7 @@ CREATE OR REPLACE FUNCTION ssil_strip_prefix(t text) RETURNS text
   LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
   SELECT CASE
     WHEN length(t) >= 4 AND left(t, 1) IN (
-      E'ו', E'ב', E'ל', E'כ', E'ה', E'מ', E'ש')
+      'ו', 'ב', 'ל', 'כ', 'ה', 'מ', 'ש')
       THEN substr(t, 2)
     ELSE t
   END;
