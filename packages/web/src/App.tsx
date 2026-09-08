@@ -1,51 +1,80 @@
 import { useEffect, useState } from 'react';
+import { BrowserRouter, Link, Route, Routes, useLocation } from 'react-router-dom';
+import { LangSwitch, useSaved } from './components.js';
+import { detectLang, RTL, stringsFor, type Lang } from './i18n.js';
+import { HomePage, ResultsPage, SavedPage, ServicePage } from './pages.js';
 
-interface Health {
-  status: string;
-  checks: Record<string, string>;
-  version: string;
-}
+function Shell() {
+  const location = useLocation();
+  const [lang, setLang] = useState<Lang>(() => detectLang(window.location.search));
+  const t = stringsFor(lang);
+  const [saved] = useSaved();
 
-/**
- * Placeholder shell. The search experience lands in phase 3; for now this
- * proves the built SPA is served by the API container and can reach the API.
- */
-export function App() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
+  // Direction and language are set on the document rather than a wrapper, so
+  // that form controls, scrollbars and the browser's own UI follow too.
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => r.json())
-      .then(setHealth)
-      .catch((e: Error) => setError(e.message));
-  }, []);
+    document.documentElement.lang = lang;
+    document.documentElement.dir = RTL.has(lang) ? 'rtl' : 'ltr';
+    document.title = t.siteName;
+    try {
+      localStorage.setItem('lang', lang);
+    } catch {
+      // Storage may be unavailable; the choice just does not persist.
+    }
+  }, [lang, t.siteName]);
+
+  // A screen reader gets no announcement from a client-side navigation unless
+  // focus is moved, so each page change resets focus to the top of the content.
+  useEffect(() => {
+    document.getElementById('main')?.focus();
+  }, [location.pathname]);
+
+  const langLink = (path: string) => `${path}${path.includes('?') ? '&' : '?'}lang=${lang}`;
 
   return (
-    <main className="shell">
-      <h1>כל השירותים החברתיים</h1>
-      <p className="lede">
-        פלטפורמה פתוחה לחיפוש שירותים חברתיים בישראל — עם API מתועד ושרת MCP.
-      </p>
-      <section className="status" aria-live="polite">
-        <h2>מצב המערכת</h2>
-        {error && <p className="err">שגיאה: {error}</p>}
-        {!health && !error && <p>בודק…</p>}
-        {health && (
-          <dl>
-            <dt>סטטוס</dt>
-            <dd>{health.status}</dd>
-            {Object.entries(health.checks).map(([name, value]) => (
-              <div key={name}>
-                <dt>{name}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-            <dt>גרסה</dt>
-            <dd>{health.version}</dd>
-          </dl>
-        )}
-      </section>
-    </main>
+    <>
+      <a className="skip" href="#main">
+        {t.skipToContent}
+      </a>
+
+      <header className="topbar">
+        <div className="topbar-inner">
+          <Link className="brand" to={langLink('/')}>
+            {t.siteName}
+          </Link>
+          <Link className="iconbtn" to={langLink('/saved')} aria-current={location.pathname === '/saved'}>
+            {t.myFolder}
+            {saved.length > 0 && <span className="badge">{saved.length}</span>}
+          </Link>
+          <LangSwitch lang={lang} onChange={setLang} />
+        </div>
+      </header>
+
+      <main id="main" className="page" tabIndex={-1}>
+        <Routes>
+          <Route path="/" element={<HomePage lang={lang} />} />
+          <Route path="/search" element={<ResultsPage lang={lang} />} />
+          <Route path="/s/:cardId" element={<ServicePage lang={lang} />} />
+          <Route path="/saved" element={<SavedPage lang={lang} />} />
+          <Route path="*" element={<HomePage lang={lang} />} />
+        </Routes>
+
+        <footer className="footer">
+          <p>{t.disclaimer}</p>
+          <nav>
+            <a href="/api/v1/stats">{t.apiLink}</a>
+            <a href="https://github.com/zomer-g/social-services-il">{t.aboutLink}</a>
+          </nav>
+        </footer>
+      </main>
+    </>
+  );
+}
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <Shell />
+    </BrowserRouter>
   );
 }

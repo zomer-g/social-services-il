@@ -262,6 +262,35 @@ v1Router.get(
   }),
 );
 
+/**
+ * "Something here is wrong."
+ *
+ * The people using this site are the only ones who find out that a phone number
+ * is dead or a service has closed, and they find out at the worst possible
+ * moment. Reporting it has to cost one sentence and no account.
+ */
+v1Router.post(
+  '/feedback',
+  handle(async (req, res) => {
+    const body = (req.body ?? {}) as { card_id?: string; kind?: string; message?: string; contact?: string };
+    const message = (body.message ?? '').trim();
+    if (message.length < 3) {
+      throw new BadRequest('message is required', 'message');
+    }
+
+    const kinds = ['error', 'closed', 'wrong_phone', 'wrong_address', 'other'];
+    const kind = kinds.includes(body.kind ?? '') ? body.kind : 'error';
+
+    await query(
+      `INSERT INTO feedback_reports (card_id, service_id, kind, message, contact)
+       VALUES ($1, (SELECT service_id FROM cards WHERE card_id = $1), $2, $3, $4)`,
+      [body.card_id ?? null, kind, message.slice(0, 2000), (body.contact ?? '').slice(0, 200) || null],
+    );
+
+    res.status(201).json({ ok: true });
+  }),
+);
+
 async function recordSearch(req: Request, resultCount: number, lang: Lang): Promise<void> {
   const q = req.query as Record<string, unknown>;
   try {

@@ -1,41 +1,428 @@
+/*
+ * Mobile first, and not as a slogan: the person this is designed for is holding
+ * a phone, possibly an old one, possibly outdoors, possibly upset. Everything
+ * below follows from that — large touch targets, high contrast, no motion that
+ * cannot be turned off, and no layout that needs two hands.
+ *
+ * Direction is handled with logical properties (inline-start/end) rather than
+ * left/right, so the same rules serve Hebrew and Arabic right-to-left and
+ * Russian and English left-to-right without a mirrored stylesheet.
+ */
+
 :root {
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-2: #eef1f7;
+  --fg: #14161c;
+  --fg-muted: #565d6d;
+  --border: #d9dee8;
+  --accent: #17418f;
+  --accent-fg: #ffffff;
+  --accent-soft: #e7edfb;
+  --urgent: #a3231d;
+  --urgent-soft: #fdeceb;
+  --ok: #1c6b45;
+  --focus: #0b63d6;
+
+  --radius: 14px;
+  --tap: 48px;
+  --gap: 12px;
+  --page: 34rem;
+
   color-scheme: light dark;
-  --bg: #fbfbfd;
-  --fg: #16181d;
-  --muted: #5a6070;
-  --accent: #1c3f94;
-  --card: #ffffff;
-  --border: #e2e5ec;
 }
+
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101218;
-    --fg: #eceef4;
-    --muted: #9aa2b4;
-    --accent: #93b0ff;
-    --card: #181b23;
-    --border: #2a2f3b;
+    --bg: #0e1016;
+    --surface: #171a22;
+    --surface-2: #1f232d;
+    --fg: #eef0f6;
+    --fg-muted: #a3abbd;
+    --border: #2c3140;
+    --accent: #9db8ff;
+    --accent-fg: #0e1016;
+    --accent-soft: #1c2740;
+    --urgent: #ff8f88;
+    --urgent-soft: #33191a;
+    --ok: #71d3a4;
+    --focus: #8ab4ff;
   }
 }
+
 * { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+  /* 17px rather than 16: this text is read under stress and sometimes at
+     arm's length. */
+  font-size: 17px;
+  line-height: 1.55;
 }
-.shell { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
-h1 { font-size: 1.75rem; margin: 0 0 0.5rem; }
-.lede { color: var(--muted); margin: 0 0 2rem; }
-.status {
-  background: var(--card);
+
+h1, h2, h3 { line-height: 1.25; margin: 0 0 0.5rem; }
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.2rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0 0 0.75rem; }
+
+a { color: var(--accent); }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Keyboard users land here first; everyone else never sees it. */
+.skip {
+  position: absolute;
+  inset-inline-start: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.75rem 1rem;
+  z-index: 100;
+}
+.skip:focus { inset-inline-start: 0; }
+
+.page {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0 1rem 6rem;
+}
+
+/* ---------- header ---------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-inner {
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  min-height: var(--tap);
+}
+.brand {
+  font-weight: 700;
+  color: inherit;
+  text-decoration: none;
+  font-size: 1rem;
+  margin-inline-end: auto;
+}
+.iconbtn {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1rem 1.25rem;
+  background: var(--surface);
+  color: var(--fg);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0 0.7rem;
 }
-.status h2 { font-size: 1rem; margin: 0 0 0.75rem; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0; }
-dl > div { display: contents; }
-dt { color: var(--muted); }
-dd { margin: 0; }
-.err { color: #c0392b; }
+.iconbtn[aria-current='true'] { background: var(--accent-soft); border-color: var(--accent); }
+.badge {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  padding: 0 0.4rem;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+/* ---------- home ---------- */
+
+.hero { padding: 1.5rem 0 0.5rem; }
+.hero h1 { font-size: 1.75rem; }
+.hero p { color: var(--fg-muted); }
+
+.searchform { display: flex; gap: 8px; margin: 1rem 0; }
+.searchform input {
+  flex: 1;
+  min-height: var(--tap);
+  padding: 0 0.9rem;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+}
+.searchform input:focus { border-color: var(--accent); }
+
+.btn {
+  min-height: var(--tap);
+  padding: 0 1.1rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+.btn.secondary { background: var(--surface); color: var(--fg); border-color: var(--border); }
+.btn.block { width: 100%; }
+.btn:disabled { opacity: 0.6; cursor: progress; }
+
+/* Suggestions appear under the search box while typing. */
+.suggestions {
+  list-style: none;
+  margin: -0.5rem 0 1rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.suggestions li + li { border-top: 1px solid var(--border); }
+.suggestions button {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0.5rem 0.9rem;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--gap);
+  align-items: center;
+}
+.suggestions button:hover { background: var(--surface-2); }
+.suggestions .count { color: var(--fg-muted); font-size: 0.85rem; }
+
+/* The six big doors into the corpus. Two columns even on the narrowest
+   phone, because three would make each target too small to hit reliably. */
+.needs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--gap);
+  margin: 1rem 0 2rem;
+}
+.need {
+  min-height: 92px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  text-align: center;
+}
+.need:hover { background: var(--accent-soft); border-color: var(--accent); }
+.need .glyph { font-size: 1.6rem; line-height: 1; }
+
+/* ---------- urgent ---------- */
+
+.urgent {
+  border: 2px solid var(--urgent);
+  background: var(--urgent-soft);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin: 1rem 0;
+}
+.urgent h2 { color: var(--urgent); margin-bottom: 0.25rem; }
+.urgent p { margin-bottom: 0.6rem; font-size: 0.95rem; }
+.urgent .btn { background: var(--urgent); border-color: var(--urgent); color: #fff; }
+
+/* ---------- results ---------- */
+
+.resultbar {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  flex-wrap: wrap;
+  margin: 0.75rem 0;
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+}
+
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
+.chip {
+  min-height: 40px;
+  padding: 0 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.chip[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+.chip .count { opacity: 0.7; font-variant-numeric: tabular-nums; }
+
+.cards { display: flex; flex-direction: column; gap: var(--gap); list-style: none; margin: 0; padding: 0; }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 0.75rem;
+}
+.card h3 { margin-bottom: 0.35rem; }
+.card h3 a { color: inherit; text-decoration: none; }
+.card h3 a:hover { text-decoration: underline; }
+.card .desc {
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+  margin-bottom: 0.6rem;
+  /* Three lines is enough to judge relevance; the rest is on the service page. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin-bottom: 0.6rem;
+}
+.card .meta .where { font-weight: 600; color: var(--fg); }
+.tag {
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  font-size: 0.8rem;
+}
+.tag.national { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+/* The point of a result card: you can act on it without opening it. */
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions .btn { flex: 1 1 auto; min-width: 7rem; font-size: 0.95rem; }
+
+.notice {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  margin: 0.5rem 0;
+}
+
+.empty { text-align: center; padding: 3rem 1rem; color: var(--fg-muted); }
+
+/* ---------- service page ---------- */
+
+.detail section { margin-bottom: 1.5rem; }
+.detail h2 { font-size: 1rem; color: var(--fg-muted); text-transform: none; margin-bottom: 0.35rem; }
+.detail .lead { font-size: 1.05rem; }
+.detail dl { margin: 0; }
+.detail dt { font-weight: 600; margin-top: 0.5rem; }
+.detail dd { margin: 0; }
+
+.sticky-actions {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+  padding: 0.75rem 0 1rem;
+  display: flex;
+  gap: 8px;
+}
+
+.source {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+/* ---------- misc ---------- */
+
+.footer {
+  border-top: 1px solid var(--border);
+  margin-top: 2rem;
+  padding-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.footer nav { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+.spinner {
+  display: inline-block;
+  width: 1.1em;
+  height: 1.1em;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Anything that moves is a problem for some readers, and none of it is
+   load-bearing here. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root { --border: currentColor; --fg-muted: var(--fg); }
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* From tablet up the page simply gets more breathing room; the layout does not
+   change shape, so there is one set of behaviours to reason about. */
+@media (min-width: 48rem) {
+  :root { --page: 44rem; }
+  body { font-size: 17px; }
+  .needs { grid-template-columns: repeat(3, 1fr); }
+}
