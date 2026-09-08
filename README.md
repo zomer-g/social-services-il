@@ -19,9 +19,15 @@ project keeps, changes and adds.
 
 ## Status
 
-Early. The scaffolding, database migration runner and health endpoint are in
-place; the schema, importer, search API, public site, admin and MCP server are
-being built in that order.
+In progress, deployed at
+[social-services-il-zomerg.xhostd.app](https://social-services-il-zomerg.xhostd.app).
+
+Working: the schema, the openeligibility taxonomy, Hebrew search, and the public
+read API — search with facets, distance ranking and collapsing, card detail,
+taxonomy, autocomplete, stats and bulk export. `node scripts/smoke.mjs <url>`
+exercises all of it end to end.
+
+Next: the public site, the MCP server, the admin, and the write API.
 
 ## Stack
 
