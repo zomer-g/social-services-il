@@ -358,3 +358,42 @@ adminRouter.post(
     res.json({ id: req.params['id'], decision });
   }),
 );
+
+/**
+ * Removes everything a source contributed.
+ *
+ * Needed when a feed turns out to be wrong at the root — a bad mapping that
+ * created five thousand malformed records — where correcting row by row is
+ * slower than re-importing. Deliberately explicit and admin-only; a source's own
+ * key can archive its services but cannot erase them.
+ */
+adminRouter.post(
+  '/purge-source',
+  handle(async (req, res) => {
+    const slug = String(req.query['slug'] ?? '');
+    if (!slug) {
+      res.status(400).json({ error: 'bad_request', message: 'slug is required' });
+      return;
+    }
+
+    const { rows } = await query<{ id: string }>('SELECT id FROM sources WHERE slug = $1', [slug]);
+    const sourceId = rows[0]?.id;
+    if (!sourceId) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    const services = await query('DELETE FROM services WHERE source_id = $1', [sourceId]);
+    const branches = await query('DELETE FROM branches WHERE source_id = $1', [sourceId]);
+    const organizations = await query('DELETE FROM organizations WHERE source_id = $1', [sourceId]);
+
+    res.json({
+      source: slug,
+      deleted: {
+        services: services.rowCount ?? 0,
+        branches: branches.rowCount ?? 0,
+        organizations: organizations.rowCount ?? 0,
+      },
+    });
+  }),
+);
