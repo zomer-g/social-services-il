@@ -9,13 +9,15 @@
     "dev": "node --watch dist/server.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@ssil/core": "*",
     "@ssil/db": "*",
     "@ssil/ingest": "*",
     "compression": "1.8.1",
     "cors": "2.8.5",
     "express": "5.1.0",
-    "helmet": "8.1.0"
+    "helmet": "8.1.0",
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "@types/compression": "1.8.1",

@@ -5,6 +5,7 @@ import compression from 'compression';
 import cors from 'cors';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
+import { handleMcpRequest } from './mcp.js';
 import { adminRouter } from './routes/admin.js';
 import { healthRouter } from './routes/health.js';
 import { v1Router } from './routes/v1.js';
@@ -34,6 +35,13 @@ export function createApp(): Express {
   app.use('/api', healthRouter);
   app.use('/api/v1', v1Router);
   app.use('/api/admin', adminRouter);
+
+  // MCP lives outside /api/v1 because it is not a REST resource: it is a
+  // JSON-RPC endpoint over the same data, versioned by the protocol itself.
+  // GET and DELETE are part of the Streamable HTTP transport, not just POST.
+  app.all('/mcp', cors({ origin: '*', exposedHeaders: ['mcp-session-id'], allowedHeaders: ['content-type', 'mcp-session-id', 'mcp-protocol-version', 'authorization'] }), (req, res) => {
+    void handleMcpRequest(req, res);
+  });
 
   const hasBuiltSpa = existsSync(join(PUBLIC_DIR, 'index.html'));
   if (hasBuiltSpa) {
