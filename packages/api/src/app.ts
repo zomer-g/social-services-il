@@ -7,6 +7,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import helmet from 'helmet';
 import { handleMcpRequest } from './mcp.js';
 import { adminRouter } from './routes/admin.js';
+import { ingestRouter } from './routes/ingest.js';
 import { healthRouter } from './routes/health.js';
 import { v1Router } from './routes/v1.js';
 
@@ -34,6 +35,7 @@ export function createApp(): Express {
 
   app.use('/api', healthRouter);
   app.use('/api/v1', v1Router);
+  app.use('/api/v1/ingest', ingestRouter);
   app.use('/api/admin', adminRouter);
 
   // MCP lives outside /api/v1 because it is not a REST resource: it is a

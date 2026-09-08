@@ -1,0 +1,475 @@
+import { Router, type Request, type Response } from 'express';
+import { z } from 'zod';
+import { query, transaction } from '@ssil/db';
+import { contentHash } from '@ssil/core';
+import { AUTO_PUBLISH_TRUST_THRESHOLD } from '@ssil/ingest';
+import { requireScope } from '../apikeys.js';
+
+/**
+ * The write API.
+ *
+ * The thing this whole project exists to add: today an organization that wants
+ * its services listed must type them into a third-party nonprofit registry and
+ * wait to be scraped, or send an email. Here it can push them.
+ *
+ * Three properties make that safe to offer.
+ *
+ * Identity is (source, external_id), not our ids. A caller pushes the same rows
+ * from its own system every night and gets the same records, so re-sending is
+ * free and nothing is duplicated by an interrupted run.
+ *
+ * dry_run returns the exact diff without writing. Nobody should have to test an
+ * integration by mutating a live directory of shelters and food banks.
+ *
+ * Errors are per item. A batch of two hundred services with one bad phone number
+ * writes the other hundred and ninety-nine and says precisely which one failed —
+ * all-or-nothing would mean one typo blocks a whole night's update.
+ */
+export const ingestRouter: Router = Router();
+
+const UrlSchema = z.object({ href: z.string().url(), title: z.string().optional() });
+
+const BranchSchema = z.object({
+  external_id: z.string().min(1).max(200),
+  name: z.string().max(300).optional(),
+  operating_unit: z.string().max(300).optional(),
+  description: z.string().max(4000).optional(),
+  address: z.string().max(500).optional(),
+  address_details: z.string().max(500).optional(),
+  city: z.string().max(200).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lon: z.number().min(-180).max(180).optional(),
+  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
+  email_address: z.string().email().optional(),
+  urls: z.array(UrlSchema).max(10).optional(),
+});
+
+const OrganizationSchema = z.object({
+  // The Israeli registration number where there is one. Supplying it is what
+  // lets a record from this source meet the same organization from another.
+  id: z.string().max(100).optional(),
+  external_id: z.string().max(200).optional(),
+  name: z.string().min(1).max(400),
+  short_name: z.string().max(200).optional(),
+  kind: z.string().max(100).optional(),
+  purpose: z.string().max(4000).optional(),
+  description: z.string().max(8000).optional(),
+  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
+  email_address: z.string().email().optional(),
+  urls: z.array(UrlSchema).max(10).optional(),
+});
+
+const ServiceSchema = z.object({
+  external_id: z.string().min(1).max(200).describe('Your id for this service. Re-sending it updates the same record.'),
+  name: z.string().min(2).max(400),
+  description: z.string().max(8000).optional(),
+  details: z.string().max(8000).optional(),
+  payment_required: z.boolean().optional(),
+  payment_details: z.string().max(2000).optional(),
+  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
+  email_address: z.string().email().optional(),
+  urls: z.array(UrlSchema).max(10).optional(),
+  implements: z.string().max(500).optional(),
+  responses: z.array(z.string()).min(1).describe('Response taxonomy ids. At least one, or the service cannot be found.'),
+  situations: z.array(z.string()).optional(),
+  organization: OrganizationSchema,
+  branches: z.array(BranchSchema).max(200).optional(),
+  national_service: z.boolean().optional().describe('True for a service with no physical location, available anywhere.'),
+  status: z.enum(['draft', 'published', 'archived']).optional(),
+});
+
+const PayloadSchema = z.object({
+  dry_run: z.boolean().optional(),
+  services: z.array(ServiceSchema).min(1).max(500),
+});
+
+type ServiceInput = z.infer<typeof ServiceSchema>;
+
+interface ItemResult {
+  external_id: string;
+  status: 'created' | 'updated' | 'unchanged' | 'rejected' | 'queued_for_review';
+  service_id?: string;
+  changes?: string[];
+  error?: string;
+}
+
+ingestRouter.post('/services', requireScope('ingest:write'), (req: Request, res: Response) => {
+  void handleIngest(req, res).catch((err: Error) => {
+    console.error('[error] ingest:', err.stack ?? err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
+  });
+});
+
+async function handleIngest(req: Request, res: Response): Promise<void> {
+  const key = req.apiKey!;
+  if (!key.sourceId || !key.sourceSlug) {
+    res.status(403).json({
+      error: 'key_has_no_source',
+      message: 'This key is not attached to a source, so its data could not be attributed. Ask an administrator to attach one.',
+    });
+    return;
+  }
+
+  const parsed = PayloadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: 'invalid_payload',
+      // The path is what makes a validation error actionable in a 500-item batch.
+      issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    });
+    return;
+  }
+
+  const { dry_run: dryRun = false, services } = parsed.data;
+  const autoPublish = key.trustLevel >= AUTO_PUBLISH_TRUST_THRESHOLD;
+
+  const { rows: runRows } = await query<{ id: string }>(
+    `INSERT INTO ingest_runs (source_id, trigger, status)
+     VALUES ($1, $2, 'running') RETURNING id`,
+    [key.sourceId, dryRun ? 'dry_run' : 'push'],
+  );
+  const runId = runRows[0]!.id;
+
+  const results: ItemResult[] = [];
+  for (const service of services) {
+    try {
+      results.push(await upsertService(service, { ...key, runId, dryRun, autoPublish }));
+    } catch (err) {
+      results.push({
+        external_id: service.external_id,
+        status: 'rejected',
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  const counts = results.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  await query(
+    `UPDATE ingest_runs SET status = 'success', finished_at = now(), stats = $2 WHERE id = $1`,
+    [runId, JSON.stringify({ ...counts, dry_run: dryRun })],
+  );
+
+  // Cards are rebuilt on publish, not per write: a batch of 500 services should
+  // cost one rebuild, and a dry run should cost none.
+  if (!dryRun && (counts['created'] || counts['updated'])) {
+    await query(
+      `INSERT INTO system_state (key, value) VALUES ('cards_need_rebuild', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      [`ingest run ${runId}`],
+    );
+  }
+
+  res.status(dryRun ? 200 : 202).json({
+    run_id: runId,
+    dry_run: dryRun,
+    // Saying this out loud matters: a caller that expected to publish and is
+    // being queued should find out from the response, not by wondering why the
+    // site does not show its data.
+    published_immediately: autoPublish,
+    summary: counts,
+    results,
+  });
+}
+
+interface Ctx {
+  sourceId: string | null;
+  sourceSlug: string | null;
+  runId: string;
+  dryRun: boolean;
+  autoPublish: boolean;
+  name: string;
+}
+
+async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult> {
+  const sourceSlug = ctx.sourceSlug!;
+  const serviceId = `${sourceSlug}:${input.external_id}`;
+  const orgId = input.organization.id ?? `${sourceSlug}:org:${input.organization.external_id ?? input.organization.name}`;
+
+  // Reject unknown taxonomy ids rather than dropping them silently: a service
+  // tagged with a category that does not exist is invisible, and the caller
+  // would have no way to know.
+  const allTags = [...input.responses, ...(input.situations ?? [])];
+  const { rows: known } = await query<{ id: string }>(
+    'SELECT id FROM taxonomy_nodes WHERE id = ANY($1::text[]) AND active',
+    [allTags],
+  );
+  const unknown = allTags.filter((t) => !known.some((k) => k.id === t));
+  if (unknown.length) {
+    throw new Error(
+      `Unknown taxonomy ids: ${unknown.join(', ')}. Use GET /api/v1/taxonomy to list valid ids.`,
+    );
+  }
+
+  const existing = await query<{ id: string; name: string; description: string | null; status: string }>(
+    'SELECT id, name, description, status FROM services WHERE id = $1',
+    [serviceId],
+  );
+  const before = existing.rows[0];
+
+  const changes: string[] = [];
+  if (!before) changes.push('created');
+  else {
+    if (before.name !== input.name) changes.push('name');
+    if ((before.description ?? null) !== (input.description ?? null)) changes.push('description');
+  }
+
+  const status = input.status ?? (ctx.autoPublish ? 'published' : 'draft');
+
+  if (ctx.dryRun) {
+    return {
+      external_id: input.external_id,
+      status: before ? (changes.length ? 'updated' : 'unchanged') : 'created',
+      service_id: serviceId,
+      changes,
+    };
+  }
+
+  await transaction(async (client) => {
+    // The payload is kept verbatim before anything is derived from it, so a
+    // mapping mistake can be diagnosed and replayed later.
+    await client.query(
+      `INSERT INTO raw_records (source_id, ingest_run_id, entity_type, external_id, payload, content_hash)
+       VALUES ($1, $2, 'service', $3, $4, $5)`,
+      [ctx.sourceId, ctx.runId, input.external_id, JSON.stringify(input), contentHash(input)],
+    );
+
+    await client.query(
+      `INSERT INTO organizations (id, slug, name, short_name, kind, purpose, description,
+                                  urls, phone_numbers, email_address, status, source_id, external_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name, short_name = EXCLUDED.short_name, kind = EXCLUDED.kind,
+         purpose = EXCLUDED.purpose, description = EXCLUDED.description,
+         urls = EXCLUDED.urls, phone_numbers = EXCLUDED.phone_numbers,
+         email_address = EXCLUDED.email_address, status = EXCLUDED.status,
+         external_ids = organizations.external_ids || EXCLUDED.external_ids,
+         updated_at = now()`,
+      [
+        orgId,
+        orgId.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase(),
+        input.organization.name,
+        input.organization.short_name ?? null,
+        input.organization.kind ?? null,
+        input.organization.purpose ?? null,
+        input.organization.description ?? null,
+        JSON.stringify(input.organization.urls ?? []),
+        input.organization.phone_numbers ?? [],
+        input.organization.email_address ?? null,
+        status,
+        ctx.sourceId,
+        JSON.stringify(input.organization.external_id ? { [sourceSlug]: input.organization.external_id } : {}),
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO services (id, name, description, details, payment_required, payment_details,
+                             urls, phone_numbers, email_address, implements, data_sources,
+                             status, source_id, external_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name, description = EXCLUDED.description, details = EXCLUDED.details,
+         payment_required = EXCLUDED.payment_required, payment_details = EXCLUDED.payment_details,
+         urls = EXCLUDED.urls, phone_numbers = EXCLUDED.phone_numbers,
+         email_address = EXCLUDED.email_address, implements = EXCLUDED.implements,
+         status = EXCLUDED.status, updated_at = now()`,
+      [
+        serviceId,
+        input.name,
+        input.description ?? null,
+        input.details ?? null,
+        input.payment_required ?? false,
+        input.payment_details ?? null,
+        JSON.stringify(input.urls ?? []),
+        input.phone_numbers ?? [],
+        input.email_address ?? null,
+        input.implements ?? null,
+        [`Submitted via API by ${ctx.name}`],
+        status,
+        ctx.sourceId,
+        JSON.stringify({ [sourceSlug]: input.external_id }),
+      ],
+    );
+
+    await client.query(
+      `INSERT INTO service_organizations (service_id, organization_id) VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [serviceId, orgId],
+    );
+
+    // Tags from a source replace that source's previous tags, but never touch a
+    // manual one: an editor's correction must survive the next nightly push.
+    await client.query(
+      `DELETE FROM entity_taxonomy
+        WHERE entity_type = 'service' AND entity_id = $1 AND origin = 'source'`,
+      [serviceId],
+    );
+    for (const [axis, ids] of [
+      ['response', input.responses],
+      ['situation', input.situations ?? []],
+    ] as const) {
+      for (const nodeId of ids) {
+        await client.query(
+          `INSERT INTO entity_taxonomy (entity_type, entity_id, node_id, axis, origin, actor)
+           VALUES ('service', $1, $2, $3::ssil_axis, 'source', $4)
+           ON CONFLICT (entity_type, entity_id, node_id) DO NOTHING`,
+          [serviceId, nodeId, axis, sourceSlug],
+        );
+      }
+    }
+
+    const branches = input.branches ?? [];
+    for (const branch of branches) {
+      const branchId = `${sourceSlug}:${branch.external_id}`;
+      const locationId = `${sourceSlug}:loc:${branch.external_id}`;
+
+      await client.query(
+        `INSERT INTO locations (id, raw_address, provider, accuracy, resolved_lat, resolved_lon,
+                                resolved_address, resolved_city, national_service)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+         ON CONFLICT (id) DO UPDATE SET
+           raw_address = EXCLUDED.raw_address,
+           -- A coordinate supplied by the source only overwrites the geocoder's
+           -- answer, never a correction someone made by hand.
+           resolved_lat = EXCLUDED.resolved_lat, resolved_lon = EXCLUDED.resolved_lon,
+           accuracy = EXCLUDED.accuracy,
+           resolved_address = EXCLUDED.resolved_address, resolved_city = EXCLUDED.resolved_city`,
+        [
+          locationId,
+          branch.address ?? '',
+          `api:${sourceSlug}`,
+          branch.lat != null ? 'building' : 'unknown',
+          branch.lat ?? null,
+          branch.lon ?? null,
+          branch.address ?? null,
+          branch.city ?? null,
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO branches (id, organization_id, location_id, name, operating_unit, description,
+                               address, address_details, urls, phone_numbers, email_address,
+                               status, source_id, external_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ON CONFLICT (id) DO UPDATE SET
+           organization_id = EXCLUDED.organization_id, location_id = EXCLUDED.location_id,
+           name = EXCLUDED.name, operating_unit = EXCLUDED.operating_unit,
+           description = EXCLUDED.description, address = EXCLUDED.address,
+           address_details = EXCLUDED.address_details, urls = EXCLUDED.urls,
+           phone_numbers = EXCLUDED.phone_numbers, email_address = EXCLUDED.email_address,
+           status = EXCLUDED.status, updated_at = now()`,
+        [
+          branchId,
+          orgId,
+          locationId,
+          branch.name ?? null,
+          branch.operating_unit ?? null,
+          branch.description ?? null,
+          branch.address ?? null,
+          branch.address_details ?? null,
+          JSON.stringify(branch.urls ?? []),
+          branch.phone_numbers ?? [],
+          branch.email_address ?? null,
+          status,
+          ctx.sourceId,
+          JSON.stringify({ [sourceSlug]: branch.external_id }),
+        ],
+      );
+
+      await client.query(
+        `INSERT INTO service_branches (service_id, branch_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [serviceId, branchId],
+      );
+    }
+
+    // A branch the source has stopped sending is detached rather than deleted,
+    // so history and any manual work on it survive.
+    if (branches.length) {
+      await client.query(
+        `DELETE FROM service_branches
+          WHERE service_id = $1
+            AND branch_id LIKE $2
+            AND branch_id <> ALL($3::text[])`,
+        [serviceId, `${sourceSlug}:%`, branches.map((b) => `${sourceSlug}:${b.external_id}`)],
+      );
+    }
+
+    await client.query(
+      `INSERT INTO change_log (entity_type, entity_id, action, changed, actor, source_id)
+       VALUES ('service', $1, $2, $3, $4, $5)`,
+      [
+        serviceId,
+        before ? 'update' : 'create',
+        JSON.stringify({ fields: changes }),
+        `api_key:${ctx.name}`,
+        ctx.sourceId,
+      ],
+    );
+
+    if (!ctx.autoPublish) {
+      await client.query(
+        `INSERT INTO moderation_queue (kind, entity_type, entity_id, payload, source_id, submitted_by)
+         VALUES ($1, 'service', $2, $3, $4, $5)`,
+        [
+          before ? 'update_service' : 'new_service',
+          serviceId,
+          JSON.stringify(input),
+          ctx.sourceId,
+          `api_key:${ctx.name}`,
+        ],
+      );
+    }
+  });
+
+  return {
+    external_id: input.external_id,
+    status: ctx.autoPublish ? (before ? (changes.length ? 'updated' : 'unchanged') : 'created') : 'queued_for_review',
+    service_id: serviceId,
+    changes,
+  };
+}
+
+/** Withdraws a service. Archived rather than deleted, so the record survives. */
+ingestRouter.delete('/services/:externalId', requireScope('ingest:write'), (req, res) => {
+  void (async () => {
+    const key = req.apiKey!;
+    const serviceId = `${key.sourceSlug}:${req.params['externalId']}`;
+    const { rowCount } = await query(
+      `UPDATE services SET status = 'archived', updated_at = now()
+        WHERE id = $1 AND source_id = $2`,
+      [serviceId, key.sourceId],
+    );
+    if (!rowCount) {
+      res.status(404).json({ error: 'not_found', message: `No service ${serviceId} from this source` });
+      return;
+    }
+    await query(
+      `INSERT INTO change_log (entity_type, entity_id, action, actor, source_id)
+       VALUES ('service', $1, 'archive', $2, $3)`,
+      [serviceId, `api_key:${key.name}`, key.sourceId],
+    );
+    await query(
+      `INSERT INTO system_state (key, value) VALUES ('cards_need_rebuild', 'service archived')
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    );
+    res.json({ service_id: serviceId, status: 'archived' });
+  })().catch((err: Error) => {
+    console.error('[error] ingest delete:', err.message);
+    res.status(500).json({ error: 'internal_error' });
+  });
+});
+
+/** What this key is allowed to do — the first call an integrator makes. */
+ingestRouter.get('/whoami', requireScope('ingest:write'), (req, res) => {
+  const key = req.apiKey!;
+  res.json({
+    key_name: key.name,
+    source: key.sourceSlug,
+    scopes: key.scopes,
+    trust_level: key.trustLevel,
+    publishes_immediately: key.trustLevel >= AUTO_PUBLISH_TRUST_THRESHOLD,
+  });
+});

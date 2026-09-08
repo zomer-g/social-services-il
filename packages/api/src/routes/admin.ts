@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { query } from '@ssil/db';
 import { clearFixtures, loadFixtures, loadTaxonomy } from '@ssil/ingest';
+import { mintKey } from '../apikeys.js';
 import { config } from '../config.js';
 
 /**
@@ -194,5 +195,166 @@ adminRouter.get(
     );
 
     res.json({ ...rows[0], sample: sample.rows });
+  }),
+);
+
+/**
+ * Sources and their keys.
+ *
+ * A source is the unit of attribution and of trust: everything pushed with a
+ * key attributed to it inherits its trust level, which decides whether a write
+ * publishes straight away or waits for a person.
+ */
+adminRouter.get(
+  '/sources',
+  handle(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT s.id, s.slug, s.name, s.kind, s.schedule, s.trust_level, s.enabled, s.last_run_at,
+              (SELECT count(*)::int FROM services sv WHERE sv.source_id = s.id) AS services,
+              (SELECT count(*)::int FROM api_keys k WHERE k.source_id = s.id AND k.revoked_at IS NULL) AS active_keys
+         FROM sources s ORDER BY s.name`,
+    );
+    res.json({ sources: rows });
+  }),
+);
+
+adminRouter.post(
+  '/sources',
+  handle(async (req, res) => {
+    const body = req.body as {
+      slug?: string; name?: string; kind?: string;
+      trust_level?: number; schedule?: string; config?: Record<string, unknown>;
+    };
+    if (!body.slug || !body.name || !body.kind) {
+      res.status(400).json({ error: 'bad_request', message: 'slug, name and kind are required' });
+      return;
+    }
+    const { rows } = await query(
+      `INSERT INTO sources (slug, name, kind, trust_level, schedule, config)
+       VALUES ($1, $2, $3::ssil_source_kind, $4, $5, $6)
+       ON CONFLICT (slug) DO UPDATE SET
+         name = EXCLUDED.name, kind = EXCLUDED.kind, trust_level = EXCLUDED.trust_level,
+         schedule = EXCLUDED.schedule, config = EXCLUDED.config, updated_at = now()
+       RETURNING id, slug, name, kind, trust_level, enabled`,
+      [body.slug, body.name, body.kind, body.trust_level ?? 50, body.schedule ?? null,
+       JSON.stringify(body.config ?? {})],
+    );
+    res.status(201).json(rows[0]);
+  }),
+);
+
+adminRouter.get(
+  '/keys',
+  handle(async (_req, res) => {
+    // Only the prefix, never the key: it exists exactly once, in the response
+    // to its own creation.
+    const { rows } = await query(
+      `SELECT k.id, k.name, k.key_prefix, k.scopes, s.slug AS source, k.last_used_at,
+              k.revoked_at, k.created_at
+         FROM api_keys k LEFT JOIN sources s ON s.id = k.source_id
+        ORDER BY k.created_at DESC`,
+    );
+    res.json({ keys: rows });
+  }),
+);
+
+adminRouter.post(
+  '/keys',
+  handle(async (req, res) => {
+    const body = req.body as { name?: string; source_slug?: string; scopes?: string[] };
+    if (!body.name) {
+      res.status(400).json({ error: 'bad_request', message: 'name is required' });
+      return;
+    }
+
+    let sourceId: string | null = null;
+    if (body.source_slug) {
+      const { rows } = await query<{ id: string }>('SELECT id FROM sources WHERE slug = $1', [body.source_slug]);
+      if (!rows[0]) {
+        res.status(400).json({ error: 'unknown_source', message: `No source with slug ${body.source_slug}` });
+        return;
+      }
+      sourceId = rows[0].id;
+    }
+
+    const { key, hash, prefix } = mintKey();
+    const { rows } = await query(
+      `INSERT INTO api_keys (name, key_hash, key_prefix, scopes, source_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, key_prefix, scopes, created_at`,
+      [body.name, hash, prefix, body.scopes ?? ['ingest:write'], sourceId],
+    );
+
+    res.status(201).json({
+      ...rows[0],
+      key,
+      note: 'This is the only time the key is shown. Store it now.',
+    });
+  }),
+);
+
+adminRouter.delete(
+  '/keys/:id',
+  handle(async (req, res) => {
+    const { rowCount } = await query(
+      'UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL',
+      [req.params['id']],
+    );
+    res.status(rowCount ? 200 : 404).json({ revoked: (rowCount ?? 0) > 0 });
+  }),
+);
+
+/** Everything waiting on a person. */
+adminRouter.get(
+  '/moderation',
+  handle(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT m.id, m.kind, m.entity_type, m.entity_id, m.submitted_by, m.status, m.created_at,
+              s.slug AS source, m.payload->>'name' AS name
+         FROM moderation_queue m
+         LEFT JOIN sources s ON s.id = m.source_id
+        WHERE m.status = 'pending'
+        ORDER BY m.created_at DESC
+        LIMIT 200`,
+    );
+    res.json({ pending: rows });
+  }),
+);
+
+adminRouter.post(
+  '/moderation/:id',
+  handle(async (req, res) => {
+    const decision = req.query['decision'] === 'reject' ? 'rejected' : 'accepted';
+    const { rows } = await query<{ entity_id: string | null }>(
+      `UPDATE moderation_queue
+          SET status = $2, reviewed_at = now(), reviewed_by = 'admin-token',
+              review_note = $3
+        WHERE id = $1 AND status = 'pending'
+        RETURNING entity_id`,
+      [req.params['id'], decision, String(req.query['note'] ?? '')],
+    );
+    const entityId = rows[0]?.entity_id;
+    if (!entityId) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    if (decision === 'accepted') {
+      await query(`UPDATE services SET status = 'published', updated_at = now() WHERE id = $1`, [entityId]);
+      await query(
+        `UPDATE branches SET status = 'published' WHERE id IN (
+           SELECT branch_id FROM service_branches WHERE service_id = $1)`,
+        [entityId],
+      );
+      await query(
+        `UPDATE organizations SET status = 'published' WHERE id IN (
+           SELECT organization_id FROM service_organizations WHERE service_id = $1)`,
+        [entityId],
+      );
+      await query('SELECT rebuild_cards()');
+      await query('SELECT refresh_taxonomy_counts()');
+    }
+
+    res.json({ id: req.params['id'], decision });
   }),
 );
