@@ -36,13 +36,15 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 
 | | |
 | --- | --- |
-| Public site | Hebrew, Arabic, Russian and English; mobile-first; results actionable without opening them; urgent helplines outside the ranked results |
+| Public site | Hebrew, Arabic, Russian and English; mobile-first; results actionable without opening them; urgent helplines outside the ranked results; WCAG 2.2 AAA |
+| Smart search | A sentence instead of a keyword, resolved to categories through the same tools MCP exposes |
 | Search | Hebrew normalisation with prefix variants, synonyms, facets, distance ranking, collapsing, and a misspelling fallback. Free text answers in 95–300 ms |
 | Read API | Documented and versioned, with bulk NDJSON export and `updated_since` |
 | Write API | Idempotent push, `dry_run`, per-item errors and warnings, trust-based publish or review |
 | MCP | Eight read-only tools, two resources, one guided prompt; no credentials |
 | Admin | Google sign-in by invitation, moderation, sources, API keys, diagnostics |
 | Importer | Converts the six-table export and pushes it through the public write API |
+| Docs | Hebrew developer page at `/developers`, machine contract at `/api/openapi.json` |
 
 Three suites cover it end to end — 97 checks, all passing against production:
 
@@ -70,6 +72,13 @@ corrupt (`human_services:hehuman_services:health:...`); they are reported rather
 than guessed at.
 
 ## Two things only you can do
+
+**Smart search** needs a model key. Everything else works without one, and the
+button hides itself until it is set:
+
+```bash
+set_env ANTHROPIC_API_KEY=sk-ant-...   # secret
+```
 
 **Google sign-in** needs OAuth credentials, which have to be created by hand in
 the Google Cloud console. Create an OAuth client (type: Web application) with
@@ -153,6 +162,16 @@ A few decisions are load-bearing and easy to undo by accident:
   "why is my service not showing" is answerable in the admin.
 - **The scheduler runs in-process.** Each channel on the host gets its own
   Postgres, so a separate worker channel would connect to an empty database.
+- **The search predicate is assembled in JavaScript**, not guarded with
+  `$1 IS NULL OR ...`. That idiom hides from the planner which filters are
+  present, which put the indexable full-text match inside an OR that can never
+  use an index — 1.4 seconds per query on the real corpus, against ~120 ms.
+- **The tools are defined once**, in `packages/api/src/tools.ts`, and shared by
+  the MCP server and smart search, so an assistant and the site's own search
+  cannot answer the same question differently.
+- **Contrast is checked, not eyeballed.** `npm run check:contrast` fails the
+  build's palette if any pair drops below AAA; the first palette failed six of
+  thirteen pairs, all in the 5:1–7:1 range that looks fine.
 
 ## Data and licensing
 

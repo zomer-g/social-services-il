@@ -234,6 +234,55 @@ export const openapi = {
         responses: { 200: { description: 'Archived.' }, 404: { $ref: '#/components/responses/NotFound' } },
       },
     },
+    '/api/v1/smart-search': {
+      post: {
+        tags: ['Search'],
+        summary: 'Search from a sentence rather than a keyword',
+        description: [
+          'Takes a description of a situation — "I have no money for food and I am in Tel Aviv" —',
+          'works out which taxonomy categories it means, and searches on those.',
+          '',
+          'Runs on the same tools the MCP endpoint exposes, called server-side. Returns a short',
+          'answer, the categories it understood (so a wrong reading can be corrected), and the',
+          'matching cards, which are re-read from the database by id rather than produced by the',
+          'model.',
+          '',
+          'Rate limited per client, and unavailable when the server has no model credentials —',
+          'check GET /api/v1/smart-search/status first. The ordinary /search endpoint has neither',
+          'restriction and should stay the default path.',
+        ].join('\n'),
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['q'],
+                properties: {
+                  q: { type: 'string', minLength: 2, maxLength: 500 },
+                  lat: { type: 'number' },
+                  lon: { type: 'number' },
+                  lang: { type: 'string', enum: ['he', 'ar', 'ru', 'en'], default: 'he' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'An answer, what was understood, and the matching cards.' },
+          400: { $ref: '#/components/responses/BadRequest' },
+          429: { description: 'Rate limited. Use /api/v1/search instead.' },
+          503: { description: 'Smart search is not configured on this server.' },
+        },
+      },
+    },
+    '/api/v1/smart-search/status': {
+      get: {
+        tags: ['Search'],
+        summary: 'Whether smart search is available on this instance',
+        responses: { 200: { description: '{ available: boolean }' } },
+      },
+    },
     '/mcp': {
       post: {
         tags: ['Search'],
