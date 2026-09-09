@@ -250,14 +250,12 @@ export const sharedTools: SharedTool[] = [
     },
     handler: async (args) => {
       const a = args as { query: string; axis?: string; lang?: string; limit?: number };
+      // Word by word, not on the whole phrase: an assistant passes the
+      // sentence somebody wrote, and whole-string similarity scored that
+      // against a two-word category name at nearly nothing. See migration 021.
       const { rows } = await query(
         `SELECT id, axis, name, card_count
-           FROM taxonomy_suggestions
-          WHERE lang = $2
-            AND ($4::text IS NULL OR axis = $4::ssil_axis)
-            AND (search_text % ssil_normalize($1) OR search_text ILIKE '%' || ssil_normalize($1) || '%')
-          ORDER BY similarity(search_text, ssil_normalize($1)) * 2 + ln(1 + card_count) DESC
-          LIMIT $3`,
+           FROM ssil_suggest_taxonomy($1, $2, $4::ssil_axis, false, $3)`,
         [a.query, a.lang ?? 'he', a.limit ?? 10, a.axis ?? null],
       );
       return { matches: rows };

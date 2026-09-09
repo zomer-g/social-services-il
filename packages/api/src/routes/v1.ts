@@ -178,14 +178,12 @@ v1Router.get(
     // Two kinds of suggestion, because people type two kinds of thing: a need
     // ("food"), which maps to a category, and a name ("Latet"), which maps to a
     // specific service.
+    //
+    // The category side matches word by word rather than on the whole phrase,
+    // so a sentence still suggests something. See migration 021.
     const taxonomy = await query(
       `SELECT id, axis, name, card_count
-         FROM taxonomy_suggestions
-        WHERE lang = $2
-          AND (search_text % ssil_normalize($1) OR search_text ILIKE '%' || ssil_normalize($1) || '%')
-          AND card_count > 0
-        ORDER BY similarity(search_text, ssil_normalize($1)) * 2 + ln(1 + card_count) DESC
-        LIMIT $3`,
+         FROM ssil_suggest_taxonomy($1, $2, NULL, true, $3)`,
       [term, lang, limit],
     );
 
