@@ -375,37 +375,47 @@ export const sharedTools: SharedTool[] = [
       };
       if (!a.card_id && !a.service_id) return 'Give either card_id or service_id.';
 
+      // Built rather than parameterised away: an `$1 IS NULL OR col = $1`
+      // predicate hides the equality from the planner, which is what made the
+      // main search take a second and a half before it was taken out of there.
+      const params: unknown[] = [a.card_id ?? a.service_id];
+      const identify = a.card_id ? 'card_id = $1' : 'service_id = $1';
+
+      const near = a.lat !== undefined && a.lon !== undefined;
+      const point = near
+        ? `ST_SetSRID(ST_MakePoint($${params.push(a.lon)}::float8, $${params.push(a.lat)}::float8), 4326)::geography`
+        : null;
+      const cityFilter = a.city ? ` AND c.city = $${params.push(a.city)}::text` : '';
+      const distance = point ? `ST_Distance(c.geom, ${point})` : null;
+
       const { rows } = await query(
         `WITH target AS (
            SELECT collapse_key, service_name
              FROM cards
-            WHERE ($1::text IS NOT NULL AND card_id = $1)
-               OR ($2::text IS NOT NULL AND service_id = $2)
+            WHERE ${identify}
             LIMIT 1
          )
          SELECT c.card_id, t.service_name, c.organization_name, c.address, c.city,
                 c.phone_numbers, c.national_service, c.location_accurate, c.updated_at,
-                CASE WHEN $3::float8 IS NOT NULL AND c.geom IS NOT NULL
-                     THEN round((ST_Distance(c.geom,
-                          ST_SetSRID(ST_MakePoint($3::float8, $4::float8), 4326)::geography) / 1000.0)::numeric, 1)
-                END AS distance_km
+                -- Every place, not just the page: a caller that has just been
+                -- told the service runs in 152 places must not then be handed a
+                -- list that claims there are 50.
+                count(*) OVER () AS total_places,
+                ${distance ? `round((${distance} / 1000.0)::numeric, 1)` : 'NULL::numeric'} AS distance_km
            FROM cards c
            JOIN target t ON t.collapse_key = c.collapse_key
-          WHERE ($5::text IS NULL OR c.city = $5::text)
-          ORDER BY
-            CASE WHEN $3::float8 IS NOT NULL AND c.geom IS NOT NULL
-                 THEN ST_Distance(c.geom, ST_SetSRID(ST_MakePoint($3::float8, $4::float8), 4326)::geography)
-            END NULLS LAST,
-            c.city
-          LIMIT $6`,
-        [a.card_id ?? null, a.service_id ?? null, a.lon ?? null, a.lat ?? null, a.city ?? null, a.limit ?? 50],
+          WHERE true${cityFilter}
+          ORDER BY ${distance ? `${distance} NULLS LAST,` : ''} c.city
+          LIMIT $${params.push(a.limit ?? 50)}`,
+        params,
       );
 
       if (rows.length === 0) return 'No service found for that id.';
 
       return {
         service_name: (rows[0] as { service_name: string }).service_name,
-        places: rows.length,
+        places: Number((rows[0] as { total_places: string }).total_places),
+        showing: rows.length,
         // Towns first: "is there one near me" is usually answered by a list of
         // places rather than by fifty addresses.
         cities: [...new Set(rows.map((r) => (r as { city: string | null }).city).filter(Boolean))],
