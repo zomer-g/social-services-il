@@ -174,7 +174,13 @@ adminRouter.get(
         WHERE ($1::text IS NULL OR kind = $1)
           AND ($2::text IS NULL OR outcome = $2)
           AND (NOT $3::boolean OR outcome <> 'ok')
-          AND ($4::text = '' OR query ILIKE '%' || $4 || '%' OR normalized LIKE '%' || ssil_normalize($4) || '%')
+          -- strpos rather than ILIKE so that a % or _ someone typed is searched
+          -- for rather than silently treated as a wildcard. The second arm
+          -- catches the Hebrew forms — prefixes, final letters — that only
+          -- match after normalisation.
+          AND ($4::text = ''
+               OR strpos(lower(query), lower($4)) > 0
+               OR strpos(normalized, ssil_normalize($4)) > 0)
         ORDER BY at DESC
         LIMIT $5 OFFSET $6`,
       [kind, outcome, failedOnly, term, limit, offset],

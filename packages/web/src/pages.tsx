@@ -438,7 +438,15 @@ export function ServicePage({ lang }: { lang: Lang }) {
 
       <section>
         <h2>{t.conditions}</h2>
-        <p>{card.payment_required ? (card.payment_details ?? t.paymentRequired) : t.free}</p>
+        {/* Three states. Silence in the record is not a statement that it is
+            free — see migration 015 — so it is reported as unknown. */}
+        <p>
+          {card.payment_required === true
+            ? (card.payment_details ?? t.paymentRequired)
+            : card.payment_required === false
+              ? t.free
+              : t.costUnknown}
+        </p>
       </section>
 
       <section>

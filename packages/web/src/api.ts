@@ -46,7 +46,7 @@ export interface TaxonomyRef {
 
 export interface CardDetail extends Card {
   service_details: string | null;
-  payment_required: boolean;
+  payment_required: boolean | null;
   payment_details: string | null;
   service_urls: { href: string; title?: string }[];
   service_email: string | null;

@@ -140,7 +140,10 @@ export const sharedTools: SharedTool[] = [
             distance_km: c.distance_m != null ? Number((c.distance_m / 1000).toFixed(1)) : null,
             phones: c.phone_numbers,
             how_to_apply: extra?.details ?? undefined,
-            cost: extra?.payment_required ? (extra.payment_details ?? 'כרוך בתשלום') : 'ללא תשלום',
+            // Three states, not two. Most records say nothing about money,
+            // and "free" is not the safe thing to say when nobody knows: the
+            // person travels, and is turned away at the door.
+            cost: costOf(extra?.payment_required, extra?.payment_details),
             for_whom: extra?.intended_for ?? undefined,
             provides: extra?.provides ?? undefined,
             links: extra?.urls ?? undefined,
@@ -436,6 +439,13 @@ export const sharedTools: SharedTool[] = [
  * caller to request service by service — a caller that must make ten more round
  * trips to answer one question will answer it vaguely instead.
  */
+/** Says nothing when the source said nothing. See migration 015. */
+function costOf(required: boolean | null | undefined, details: string | null | undefined) {
+  if (required === true) return details ?? 'כרוך בתשלום';
+  if (required === false) return 'ללא תשלום';
+  return undefined;
+}
+
 async function enrich(
   cardIds: string[],
   lang: string,
@@ -444,7 +454,7 @@ async function enrich(
     string,
     {
       details: string | null;
-      payment_required: boolean;
+      payment_required: boolean | null;
       payment_details: string | null;
       urls: unknown;
       provides: string[] | null;
@@ -474,7 +484,10 @@ async function enrich(
         String(row['card_id']),
         {
           details: (row['details'] as string) ?? null,
-          payment_required: Boolean(row['payment_required']),
+          payment_required:
+            row['payment_required'] === null || row['payment_required'] === undefined
+              ? null
+              : Boolean(row['payment_required']),
           payment_details: (row['payment_details'] as string) ?? null,
           urls: row['urls'] ?? null,
           provides: (row['provides'] as string[]) ?? null,

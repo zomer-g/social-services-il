@@ -240,6 +240,19 @@ const truthy = (value) =>
   value !== undefined && ['true', '1', 'yes', 'checked', 'sometimes', 'כן'].includes(String(value).toLowerCase());
 
 /**
+ * Blank is not "free". 19,191 of the 23,016 services in this export say nothing
+ * about payment, and reading that silence as "no charge" was the single most
+ * damaging thing this importer did: it sent someone with no money to a service
+ * that might charge. Only an explicit answer is carried across.
+ */
+const payment = (value) => {
+  const said = String(value ?? '').trim().toLowerCase();
+  if (!said) return undefined;
+  if (['no', 'false', '0', 'unchecked', 'לא'].includes(said)) return false;
+  return truthy(said) ? true : undefined;
+};
+
+/**
  * The geocoders in this corpus report accuracy in their own vocabulary. Anything
  * at street level or better can be navigated to; the rest is shown with a
  * warning, because a pin on a city centroid misleads more than a missing pin.
@@ -435,7 +448,7 @@ function convertServices(tables) {
       name: name.slice(0, 400),
       description: val(row, 'description')?.slice(0, 8000),
       details: val(row, 'details')?.slice(0, 8000),
-      payment_required: truthy(val(row, 'payment_required')),
+      payment_required: payment(val(row, 'payment_required')),
       payment_details: val(row, 'payment_details')?.slice(0, 2000),
       phone_numbers: asList(val(row, 'phone_numbers')).slice(0, 10),
       implements: val(row, 'implements')?.slice(0, 500),

@@ -87,6 +87,7 @@ interface Strings {
   resultsHeading: string;
   free: string;
   paymentRequired: string;
+  costUnknown: string;
   howToApply: string;
   whereAndWhen: string;
   providedBy: string;
@@ -178,6 +179,7 @@ const he: Strings = {
   resultsHeading: 'תוצאות החיפוש',
   free: 'ללא תשלום',
   paymentRequired: 'כרוך בתשלום',
+  costUnknown: 'לא צוין אם השירות כרוך בתשלום — כדאי לברר בטלפון',
   howToApply: 'איך פונים',
   whereAndWhen: 'איפה',
   providedBy: 'מי מפעיל',
@@ -270,6 +272,7 @@ const ar: Strings = {
   resultsHeading: 'نتائج البحث',
   free: 'بدون مقابل',
   paymentRequired: 'مقابل رسوم',
+  costUnknown: 'لم يُذكر إن كانت الخدمة مقابل رسوم — يُفضّل الاستفسار هاتفياً',
   howToApply: 'كيفية التقديم',
   whereAndWhen: 'أين',
   providedBy: 'الجهة المشغّلة',
@@ -362,6 +365,7 @@ const ru: Strings = {
   resultsHeading: 'Результаты поиска',
   free: 'Бесплатно',
   paymentRequired: 'Платно',
+  costUnknown: 'Не указано, платная ли услуга — уточните по телефону',
   howToApply: 'Как обратиться',
   whereAndWhen: 'Где',
   providedBy: 'Кто предоставляет',
@@ -454,6 +458,7 @@ const en: Strings = {
   resultsHeading: 'Search results',
   free: 'Free',
   paymentRequired: 'There is a charge',
+  costUnknown: 'Whether there is a charge is not stated — ask when you call',
   howToApply: 'How to apply',
   whereAndWhen: 'Where',
   providedBy: 'Provided by',

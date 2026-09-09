@@ -83,7 +83,11 @@ const ServiceSchema = z.object({
   name: z.string().min(2).max(400),
   description: z.string().max(8000).optional(),
   details: z.string().max(8000).optional(),
-  payment_required: z.boolean().optional(),
+  payment_required: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe('true = charges, false = stated free. Omit it when the source did not say; it is not assumed free.'),
   payment_details: z.string().max(2000).optional(),
   phone_numbers: z.array(z.string().max(50)).max(10).optional(),
   email_address: z.string().email().optional(),
@@ -331,7 +335,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
         input.name,
         input.description ?? null,
         input.details ?? null,
-        input.payment_required ?? false,
+        input.payment_required ?? null,
         input.payment_details ?? null,
         JSON.stringify(input.urls ?? []),
         input.phone_numbers ?? [],
