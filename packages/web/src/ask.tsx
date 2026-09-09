@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { stringsFor, type Lang } from './i18n.js';
 
 /**
@@ -38,11 +38,16 @@ export function AskPanel({ lang, available }: { lang: Lang; available: boolean }
   const t = stringsFor(lang);
   const [question, setQuestion] = useState('');
   const [state, setState] = useState<State>({ kind: 'idle' });
-  // Focus moves to the answer once it lands: a screen reader user who submits a
-  // question and is left at the bottom of a form has no way to know anything
-  // happened, and the live region alone reads it without letting them navigate
-  // back through it.
   const answerRef = useRef<HTMLDivElement>(null);
+
+  // Focus follows the answer, in an effect rather than straight after
+  // setState: the ref is not attached until React has committed the render, so
+  // focusing at that point silently did nothing. The live region still read the
+  // answer out, which is why it looked fine — but a screen reader user was left
+  // at the bottom of the form with no way to navigate back into what arrived.
+  useEffect(() => {
+    if (state.kind === 'answered') answerRef.current?.focus();
+  }, [state.kind]);
 
   if (!available) return null;
 
@@ -69,7 +74,6 @@ export function AskPanel({ lang, available }: { lang: Lang; available: boolean }
         return;
       }
       setState({ kind: 'answered', answer: body.answer, understood: body.understood });
-      window.setTimeout(() => answerRef.current?.focus(), 0);
     } catch {
       setState({ kind: 'failed', message: t.askFailed });
     }
