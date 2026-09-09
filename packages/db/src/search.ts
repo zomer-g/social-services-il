@@ -229,12 +229,29 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
     ),
     ranked AS (
       SELECT f.*,
-        -- Three additive terms on comparable scales, so the weights mean
-        -- something: how well the words match, how substantial the service is,
-        -- and how close it is.
+        -- Four terms, and the weights only mean something because the third
+        -- one is bounded.
+        --
+        -- It used to be ln(1 + score) * 0.5, and that comment claimed the
+        -- terms were on comparable scales. They were not. card_score is
+        -- multiplicative and spans orders of magnitude — a ministry with
+        -- hundreds of branches scores 2150 where a small charity scores 14 —
+        -- so that term alone spread 2.48 points, while ts_rank_cd normalised
+        -- by length rarely spans 0.5 in total. The prior was not breaking
+        -- ties between similar matches, it was deciding the order outright.
+        --
+        -- What that looked like: searching "סל מזון" in Jerusalem put the
+        -- city's general welfare desk first and "סלי מזון היו שלום" — whose
+        -- name is the query — sixth, behind four services that merely carry a
+        -- food tag. No amount of matching could have closed 2.48 points.
+        --
+        -- Squashed into roughly a third of a point, it does the job it was
+        -- always meant to do: when the words match about as well, prefer the
+        -- service that is more substantial and more likely to answer the
+        -- phone. It can no longer outvote the words themselves.
         COALESCE(f.text_rank, 0) * 6
           + COALESCE(f.trgm, 0) * 2
-          + ln(1 + f.score) * 0.5
+          + least(ln(1 + GREATEST(f.score, 0)) / 10.0, 1.0) * 0.6
           + ${proximity} AS rank
       FROM filtered f
     ),
