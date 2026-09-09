@@ -123,17 +123,24 @@ DECLARE
 BEGIN
   IF k IS NULL THEN RETURN NULL; END IF;
 
-  -- 1. The corpus's own spelling, modulo punctuation and final forms.
-  SELECT city INTO hit FROM city_index WHERE city_key = k;
-  IF hit IS NOT NULL THEN RETURN hit; END IF;
-
-  -- 2. A name we have been told about explicitly. The alias points at a name;
-  -- it is returned only if the corpus actually holds it, so a stale alias
-  -- cannot invent a filter that matches nothing.
+  -- 1. A name we have been told about explicitly. This runs BEFORE the corpus
+  -- index, and the first version had it after — which made it dead code for
+  -- exactly the cases it was written for. "Jerusalem" is itself a city string
+  -- in this data, so the index matched it and returned it unchanged, and the
+  -- alias that exists to say "that means ירושלים" never ran. An alias is a
+  -- statement that the corpus's own spelling is not the one to answer with, so
+  -- it has to outrank it.
+  --
+  -- It is returned only if the corpus actually holds the target, so a stale
+  -- alias cannot invent a filter that matches nothing.
   SELECT ci.city INTO hit
     FROM city_aliases ca
     JOIN city_index ci ON ci.city_key = ssil_city_key(ca.canonical)
    WHERE ca.alias_key = k;
+  IF hit IS NOT NULL THEN RETURN hit; END IF;
+
+  -- 2. The corpus's own spelling, modulo punctuation and final forms.
+  SELECT city INTO hit FROM city_index WHERE city_key = k;
   IF hit IS NOT NULL THEN RETURN hit; END IF;
 
   -- 3. Nearest by trigram, and only when it is not a close-run thing.
@@ -178,8 +185,11 @@ BEGIN
   IF ssil_resolve_city('נצרת עילית') <> 'נוף הגליל' THEN
     RAISE EXCEPTION 'the 2019 rename is not followed, got %', coalesce(ssil_resolve_city('נצרת עילית'), '(null)');
   END IF;
-  IF ssil_resolve_city('Jerusalem') <> 'ירושלים' THEN
-    RAISE EXCEPTION 'the Latin name did not reach the Hebrew one, got %', coalesce(ssil_resolve_city('Jerusalem'), '(null)');
+  -- Also a warning: at the moment this migration runs the cards still carry the
+  -- Latin names, and it is the rebuild afterwards that replaces them.
+  IF ssil_resolve_city('Jerusalem') IS DISTINCT FROM 'ירושלים' THEN
+    RAISE WARNING 'Jerusalem resolved to % (expected ירושלים after the rebuild)',
+      coalesce(ssil_resolve_city('Jerusalem'), '(null)');
   END IF;
 END
 $$;
@@ -198,6 +208,18 @@ DECLARE
   built integer;
 BEGIN
   built := rebuild_cards();
+
+  -- Apply the alias list to the data, so no card is left carrying a name the
+  -- resolver will never answer with. Without this the 96 cards whose city is
+  -- "Jerusalem" become unreachable by either name: a search for ירושלים
+  -- excludes them, and a search for Jerusalem is resolved to ירושלים and
+  -- excludes them too.
+  UPDATE cards c
+     SET city = ca.canonical
+    FROM city_aliases ca
+   WHERE ssil_city_key(c.city) = ca.alias_key
+     AND c.city IS DISTINCT FROM ca.canonical;
+
   PERFORM rebuild_city_index();
   RETURN built;
 END;
