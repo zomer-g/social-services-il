@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { query, searchCards } from '@ssil/db';
 import { LANGS, type Lang } from '@ssil/core';
 import { BadRequest, bbox, int, list, num, oneOf, point, str } from '../params.js';
+import { outcomeFor, recordSearch } from '../searchlog.js';
 
 /**
  * The public read API.
@@ -37,6 +38,7 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
 v1Router.get(
   '/search',
   handle(async (req, res) => {
+    const started = Date.now();
     const q = req.query as Record<string, unknown>;
     const at = point(q);
     const lang = langOf(req);
@@ -61,7 +63,21 @@ v1Router.get(
     // What people looked for and whether the corpus could answer, with no
     // identifier attached. A run of zero-result searches is the clearest signal
     // the admin gets about which services to go and collect next.
-    void recordSearch(req, result.total, lang);
+    recordSearch({
+      kind: 'plain',
+      outcome: outcomeFor(result.total),
+      query: str(q, 'q') ?? null,
+      responseIds: list(q, 'response') ?? [],
+      situationIds: list(q, 'situation') ?? [],
+      city: str(q, 'city') ?? null,
+      hasLocation: at !== undefined,
+      lang,
+      resultCount: result.total,
+      // The first page only: the log exists so somebody can see what came back,
+      // and the answer to "was this search any good" is on the first screen.
+      cardIds: result.cards.map((c) => c.card_id),
+      durationMs: Date.now() - started,
+    });
 
     res.set('Cache-Control', CACHE).json(result);
   }),
@@ -290,25 +306,3 @@ v1Router.post(
     res.status(201).json({ ok: true });
   }),
 );
-
-async function recordSearch(req: Request, resultCount: number, lang: Lang): Promise<void> {
-  const q = req.query as Record<string, unknown>;
-  try {
-    await query(
-      `INSERT INTO search_events (query, normalized, response_ids, situation_ids, city, has_location, lang, result_count)
-       VALUES ($1, ssil_normalize($1), $2, $3, $4, $5, $6, $7)`,
-      [
-        str(q, 'q') ?? null,
-        list(q, 'response') ?? [],
-        list(q, 'situation') ?? [],
-        str(q, 'city') ?? null,
-        q['lat'] !== undefined,
-        lang,
-        resultCount,
-      ],
-    );
-  } catch (err) {
-    // Never let analytics break a search.
-    console.error('[warn] could not record search event:', (err as Error).message);
-  }
-}

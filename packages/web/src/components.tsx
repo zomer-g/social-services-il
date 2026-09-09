@@ -91,10 +91,14 @@ export function ActionCard({
  *
  * Kept out of the ranked results entirely. Someone in immediate danger should
  * not have to read a list, compare options or understand a taxonomy.
+ *
+ * Deliberately small: this site is for finding a service, and the emergency
+ * lines are a safety net beside that, not the thing the page is about. The
+ * numbers are still one tap away, with no button to press first — they are
+ * simply a compact strip rather than a panel.
  */
 export function UrgentBar({ lang }: { lang: Lang }) {
   const t = stringsFor(lang);
-  const [open, setOpen] = useState(false);
 
   // Nationally published, permanently staffed lines. Hard-coded rather than
   // queried, because this must work even when the database does not.
@@ -102,11 +106,11 @@ export function UrgentBar({ lang }: { lang: Lang }) {
     { name: lang === 'ar' ? 'الشرطة' : lang === 'ru' ? 'Полиция' : lang === 'en' ? 'Police' : 'משטרה', phone: '100' },
     { name: lang === 'ar' ? 'إسعاف' : lang === 'ru' ? 'Скорая' : lang === 'en' ? 'Ambulance' : 'מד״א', phone: '101' },
     {
-      name: lang === 'ar' ? 'ער"ن — دعم نفسي' : lang === 'ru' ? 'ЭРАН — душевная поддержка' : lang === 'en' ? 'ERAN emotional first aid' : 'ער״ן — עזרה ראשונה נפשית',
+      name: lang === 'ar' ? 'ער"ن' : lang === 'ru' ? 'ЭРАН' : lang === 'en' ? 'ERAN' : 'ער״ן',
       phone: '1201',
     },
     {
-      name: lang === 'ar' ? 'خط العنف الأسري' : lang === 'ru' ? 'Насилие в семье' : lang === 'en' ? 'Domestic violence line' : 'קו סיוע לנפגעות אלימות במשפחה',
+      name: lang === 'ar' ? 'عنف أسري' : lang === 'ru' ? 'Насилие в семье' : lang === 'en' ? 'Domestic violence' : 'אלימות במשפחה',
       phone: '118',
     },
   ];
@@ -114,20 +118,15 @@ export function UrgentBar({ lang }: { lang: Lang }) {
   return (
     <section className="urgent" aria-labelledby="urgent-heading">
       <h2 id="urgent-heading">{t.urgentHelp}</h2>
-      <p>{t.urgentHelpBody}</p>
-      {!open ? (
-        <button type="button" className="btn block" onClick={() => setOpen(true)}>
-          {t.callNow}
-        </button>
-      ) : (
-        <div className="actions">
-          {lines.map((l) => (
-            <a key={l.phone} className="btn" href={`tel:${l.phone}`}>
-              {l.name} · {l.phone}
+      <ul>
+        {lines.map((l) => (
+          <li key={l.phone}>
+            <a href={`tel:${l.phone}`}>
+              {l.name} {l.phone}
             </a>
-          ))}
-        </div>
-      )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

@@ -122,12 +122,147 @@ adminRouter.get(
       `SELECT normalized, count(*)::int AS searches, max(at) AS last_seen,
               (array_agg(query ORDER BY at DESC))[1] AS example
          FROM search_events
-        WHERE result_count = 0 AND normalized IS NOT NULL AND normalized <> ''
+        -- outcome, not result_count: a search that errored also returned no
+        -- rows, and counting it here would send someone to collect services
+        -- for a need the corpus may already cover.
+        WHERE outcome = 'empty' AND normalized IS NOT NULL AND normalized <> ''
         GROUP BY normalized
         ORDER BY count(*) DESC, max(at) DESC
         LIMIT 100`,
     );
     res.json({ gaps: rows });
+  }),
+);
+
+/**
+ * Every search, with what it produced.
+ *
+ * The gaps list above answers "what is the corpus missing", which is a content
+ * question. This answers a different one: did the search itself work. A smart
+ * search that threw, one the model declined, one that ran while a source was
+ * down — from the outside all of those look exactly like a search over a corpus
+ * that had nothing, and only this list can tell them apart.
+ *
+ * `failed=true` is the working default for that job: it hides the searches that
+ * returned results and leaves the ones somebody has to look at.
+ */
+adminRouter.get(
+  '/searches',
+  handle(async (req, res) => {
+    const kinds = ['plain', 'smart', 'deep'];
+    const outcomes = ['ok', 'empty', 'error', 'declined', 'rate_limited', 'unavailable', 'invalid'];
+
+    const kind = kinds.includes(String(req.query['kind'] ?? '')) ? String(req.query['kind']) : null;
+    const outcome = outcomes.includes(String(req.query['outcome'] ?? ''))
+      ? String(req.query['outcome'])
+      : null;
+    // Anything that is not a plain success. Kept as one filter rather than
+    // asking the reader to select six outcomes by hand.
+    const failedOnly = req.query['failed'] === 'true';
+    const term = String(req.query['q'] ?? '').trim();
+    const limit = Math.min(Math.max(Number(req.query['limit'] ?? 100), 1), 500);
+    const offset = Math.max(Number(req.query['offset'] ?? 0), 0);
+
+    const { rows } = await query(
+      `SELECT id, at, kind, outcome, query, city, lang, has_location,
+              result_count, duration_ms, error,
+              cardinality(card_ids) AS cards_returned,
+              response_ids, situation_ids, tools_used, sources,
+              left(answer, 200) AS answer_preview,
+              (answer IS NOT NULL) AS has_answer
+         FROM search_events
+        WHERE ($1::text IS NULL OR kind = $1)
+          AND ($2::text IS NULL OR outcome = $2)
+          AND (NOT $3::boolean OR outcome <> 'ok')
+          AND ($4::text = '' OR query ILIKE '%' || $4 || '%' OR normalized LIKE '%' || ssil_normalize($4) || '%')
+        ORDER BY at DESC
+        LIMIT $5 OFFSET $6`,
+      [kind, outcome, failedOnly, term, limit, offset],
+    );
+
+    // Counts over the whole window rather than the page, so the tabs can say
+    // how many failures there are without paging to the end to find out.
+    const totals = await query(
+      `SELECT outcome, kind, count(*)::int AS n
+         FROM search_events
+        WHERE at > now() - interval '30 days'
+        GROUP BY outcome, kind`,
+    );
+
+    res.json({ searches: rows, totals: totals.rows, limit, offset });
+  }),
+);
+
+/**
+ * One search, in full.
+ *
+ * The card ids are resolved back through the card table rather than replayed
+ * from a stored copy, which means a card that has since been deleted shows as
+ * missing instead of as a row that still exists. That difference is the point:
+ * "this search returned four services and three of them are gone" is a finding.
+ */
+adminRouter.get(
+  '/searches/:id',
+  handle(async (req, res) => {
+    const id = Number(req.params['id']);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      res.status(400).json({ error: 'bad_request', message: 'id must be a positive integer' });
+      return;
+    }
+    const { rows } = await query(`SELECT * FROM search_events WHERE id = $1`, [id]);
+    const event = rows[0] as Record<string, unknown> | undefined;
+    if (!event) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    const cardIds = (event['card_ids'] as string[] | null) ?? [];
+    const cards = cardIds.length
+      ? (
+          await query(
+            `SELECT o.id AS card_id, c.service_name, c.organization_name, c.city,
+                    (c.card_id IS NOT NULL) AS still_present
+               FROM unnest($1::text[]) WITH ORDINALITY AS o(id, ord)
+               LEFT JOIN cards c ON c.card_id = o.id
+              ORDER BY o.ord`,
+            [cardIds],
+          )
+        ).rows
+      : [];
+
+    // Category ids are opaque strings; the person reading this thinks in names.
+    const nodeIds = [
+      ...((event['response_ids'] as string[] | null) ?? []),
+      ...((event['situation_ids'] as string[] | null) ?? []),
+    ];
+    const names = nodeIds.length
+      ? (
+          await query<{ node_id: string; name: string }>(
+            `SELECT node_id, name FROM taxonomy_names
+              WHERE node_id = ANY($1::text[]) AND lang = 'he'`,
+            [nodeIds],
+          )
+        ).rows
+      : [];
+
+    // The same phrase, however it was searched. A term that fails on the smart
+    // route and works on the plain one is a routing bug, not a missing service,
+    // and there is no way to see that from a single row.
+    const related = await query(
+      `SELECT id, at, kind, outcome, result_count
+         FROM search_events
+        WHERE normalized IS NOT NULL AND normalized <> ''
+          AND normalized = $2 AND id <> $1
+        ORDER BY at DESC LIMIT 20`,
+      [id, event['normalized'] ?? ''],
+    );
+
+    res.json({
+      search: event,
+      cards,
+      names: Object.fromEntries(names.map((n) => [n.node_id, n.name])),
+      related: related.rows,
+    });
   }),
 );
 
@@ -489,7 +624,11 @@ adminRouter.get(
           WHERE NOT national_service AND geom IS NULL)::int                      AS unresolved_locations,
         (SELECT count(*) FROM entity_taxonomy WHERE origin = 'llm')::int         AS tag_suggestions,
         (SELECT count(*) FROM search_events
-          WHERE result_count = 0 AND at > now() - interval '30 days')::int        AS empty_searches_30d,
+          WHERE outcome = 'empty' AND at > now() - interval '30 days')::int       AS empty_searches_30d,
+        -- Searches that did not run, as opposed to searches that ran and found
+        -- nothing. A number above zero here is a bug, not a content gap.
+        (SELECT count(*) FROM search_events
+          WHERE outcome NOT IN ('ok', 'empty') AND at > now() - interval '7 days')::int AS failed_searches_7d,
         (SELECT value FROM system_state WHERE key = 'cards_need_rebuild')        AS rebuild_pending,
         (SELECT max(updated_at) FROM cards)                                      AS last_updated
     `);

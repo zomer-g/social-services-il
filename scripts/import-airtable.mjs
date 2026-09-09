@@ -425,6 +425,7 @@ function convertServices(tables) {
         ...(!national && lat !== undefined && lon !== undefined ? { lat, lon } : {}),
         location_accuracy: national ? 'unknown' : (ACCURACY[rawAccuracy] ?? 'unknown'),
         phone_numbers: asList(val(b, 'phone_numbers')).slice(0, 10),
+        source_updated_at: sourceDate(val(b, 'last_modified')),
         ...(branchOrg ? { organization: branchOrg } : {}),
       });
     }
@@ -438,6 +439,7 @@ function convertServices(tables) {
       payment_details: val(row, 'payment_details')?.slice(0, 2000),
       phone_numbers: asList(val(row, 'phone_numbers')).slice(0, 10),
       implements: val(row, 'implements')?.slice(0, 500),
+      source_updated_at: sourceDate(val(row, 'Last Modified'), val(row, 'last_modified')),
       responses,
       situations,
       organization: orgOf(orgId),
@@ -448,6 +450,71 @@ function convertServices(tables) {
   }
 
   return { services, skipped };
+}
+
+/**
+ * The export carries two modification dates, in two different formats.
+ *
+ * Services have `Last Modified` as `YYYY-MM-DD h:mma`, which is unambiguous, and
+ * a `last_modified` as `D/M/YYYY h:mma`, which is not: 5/7/2026 is either the
+ * fifth of July or the seventh of May. It is day-first — the two columns agree
+ * on the date for every row sampled, and 18/2/2026 settles it — but the ISO
+ * column is preferred wherever it exists rather than relying on that.
+ *
+ * Branches have only the ambiguous one.
+ *
+ * The time carries no zone. It is read as Israel time, which is where every
+ * record in this corpus was written; being an hour or two out matters far less
+ * than the alternative, which was to serve the rebuild timestamp and call it
+ * freshness.
+ */
+function sourceDate(...values) {
+  for (const raw of values) {
+    const value = (raw ?? '').trim();
+    if (!value) continue;
+
+    const iso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})\s*([ap]m)?$/i.exec(value);
+    if (iso) {
+      const [, y, m, d, h, min, ampm] = iso;
+      return israelTime(+y, +m, +d, hour24(+h, ampm), +min);
+    }
+
+    const dmy = /^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})\s*([ap]m)?$/i.exec(value);
+    if (dmy) {
+      const [, d, m, y, h, min, ampm] = dmy;
+      if (+m > 12) continue;
+      return israelTime(+y, +m, +d, hour24(+h, ampm), +min);
+    }
+  }
+  return undefined;
+}
+
+function hour24(hour, ampm) {
+  if (!ampm) return hour;
+  if (ampm.toLowerCase() === 'pm') return hour === 12 ? 12 : hour + 12;
+  return hour === 12 ? 0 : hour;
+}
+
+/**
+ * Israel is UTC+2, or +3 under daylight saving — which runs from the Friday
+ * before the last Sunday of March to the last Sunday of October. Worth the few
+ * lines: getting it wrong would put a record an hour into the future, and a
+ * date in the future is the one thing a freshness field must never show.
+ */
+function israelTime(y, mo, d, h, mi) {
+  const guess = Date.UTC(y, mo - 1, d, h - 2, mi);
+  return new Date(guess - (inIsraelDst(guess) ? 3600_000 : 0)).toISOString();
+}
+
+function inIsraelDst(ms) {
+  const year = new Date(ms).getUTCFullYear();
+  const lastSunday = (month) => {
+    const last = new Date(Date.UTC(year, month + 1, 0));
+    return last.getUTCDate() - last.getUTCDay();
+  };
+  const start = Date.UTC(year, 2, lastSunday(2) - 2, 0);
+  const end = Date.UTC(year, 9, lastSunday(9), 1);
+  return ms >= start && ms < end;
 }
 
 function* batches(services) {

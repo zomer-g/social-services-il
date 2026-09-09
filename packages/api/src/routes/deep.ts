@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config.js';
 import { baseUrlOf, callRemoteTool, listServers, openSession } from '../mcpclient.js';
+import { outcomeFor, recordSearch } from '../searchlog.js';
 import {
   collect,
   loadCards,
@@ -30,14 +31,34 @@ import {
 export const deepRouter: Router = Router();
 
 deepRouter.post('/deep-search', (req: Request, res: Response) => {
-  void handle(req, res).catch((err: Error) => {
+  const started = Date.now();
+  void handle(req, res, started).catch((err: Error) => {
     console.error('[error] deep search:', err.stack ?? err.message);
+    // This route reaches servers we do not run, so it fails in ways the others
+    // cannot: a source that hangs, one that changed its tool schema, one that
+    // went away. None of it is visible from the outside, where every failure
+    // looks like a search that returned nothing.
+    recordSearch({
+      kind: 'deep',
+      outcome: 'error',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      lang: typeof (req.body as { lang?: unknown })?.lang === 'string' ? (req.body as { lang: string }).lang : 'he',
+      error: err.message,
+      durationMs: Date.now() - started,
+    });
     if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
   });
 });
 
-async function handle(req: Request, res: Response): Promise<void> {
+async function handle(req: Request, res: Response, started: number): Promise<void> {
   if (!config.anthropicApiKey) {
+    recordSearch({
+      kind: 'deep',
+      outcome: 'unavailable',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      error: 'ANTHROPIC_API_KEY is not set',
+      durationMs: Date.now() - started,
+    });
     res.status(503).json({
       error: 'smart_search_unavailable',
       message: 'החיפוש בכל המקורות אינו מוגדר בשרת. יש להגדיר ANTHROPIC_API_KEY.',
@@ -47,22 +68,48 @@ async function handle(req: Request, res: Response): Promise<void> {
 
   const parsed = RequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    recordSearch({
+      kind: 'deep',
+      outcome: 'invalid',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      durationMs: Date.now() - started,
+    });
     res.status(400).json({ error: 'bad_request', message: 'q is required (2-500 characters)' });
     return;
   }
+
+  const { q, lat, lon, lang } = parsed.data;
+
   if (overLimit(req.ip ?? 'unknown')) {
+    recordSearch({
+      kind: 'deep',
+      outcome: 'rate_limited',
+      query: q,
+      lang,
+      hasLocation: lat !== undefined,
+      durationMs: Date.now() - started,
+    });
     res.status(429).json({
       error: 'rate_limited',
       message: 'יותר מדי חיפושים בשעה האחרונה. אפשר להשתמש בחיפוש הרגיל.',
     });
     return;
   }
-
-  const { q, lat, lon, lang } = parsed.data;
   const session = await openSession(baseUrlOf(req));
 
   try {
     if (session.tools.length === 0) {
+      recordSearch({
+        kind: 'deep',
+        outcome: 'unavailable',
+        query: q,
+        lang,
+        hasLocation: lat !== undefined,
+        unavailable: session.failures,
+        error: 'no source answered the tool listing',
+        durationMs: Date.now() - started,
+      });
       res.status(503).json({
         error: 'no_sources',
         message: 'אף מקור מידע אינו זמין כרגע.',
@@ -129,6 +176,16 @@ async function handle(req: Request, res: Response): Promise<void> {
       });
 
       if (response.stop_reason === 'refusal') {
+        recordSearch({
+          kind: 'deep',
+          outcome: 'declined',
+          query: q,
+          lang,
+          hasLocation: lat !== undefined,
+          toolsUsed: [...new Set(calls)],
+          sources: [...session.clients.keys()],
+          durationMs: Date.now() - started,
+        });
         res.status(422).json({ error: 'declined', message: 'לא הצלחנו לעבד את הבקשה הזו.' });
         return;
       }
@@ -177,6 +234,27 @@ async function handle(req: Request, res: Response): Promise<void> {
     }
 
     const cards = await loadCards(cardIds.slice(0, 20), lang, lat, lon);
+
+    // A deep search that answered off two sources when three were registered
+    // is a different answer from one that had them all, so which were missing
+    // is part of the record rather than a footnote in the response.
+    recordSearch({
+      kind: 'deep',
+      outcome: outcomeFor(cards.length),
+      query: q,
+      responseIds: interpretation.responses.map((r) => r.id),
+      situationIds: interpretation.situations.map((s) => s.id),
+      city: interpretation.city ?? null,
+      hasLocation: lat !== undefined,
+      lang,
+      resultCount: cards.length,
+      cardIds,
+      answer,
+      toolsUsed: [...new Set(calls)],
+      sources: [...session.clients.keys()],
+      unavailable: session.failures.length > 0 ? session.failures : undefined,
+      durationMs: Date.now() - started,
+    });
 
     res.json({
       answer: answer.trim(),

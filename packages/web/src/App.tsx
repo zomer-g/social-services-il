@@ -45,6 +45,14 @@ function Shell() {
         {t.skipToContent}
       </a>
 
+      {/* This is not a live service yet, and a directory of helplines is exactly
+          the kind of page someone would act on in good faith. The stamp says so
+          across every screen; draftNotice in the footer says the same thing to a
+          screen reader, which cannot see it. */}
+      <div className="draftmark" aria-hidden="true">
+        {t.draftMark}
+      </div>
+
       <header className="topbar">
         <div className="topbar-inner">
           <Link className="brand" to={langLink('/')}>
@@ -72,6 +80,7 @@ function Shell() {
         </Routes>
 
         <footer className="footer">
+          <p className="draftnotice">{t.draftNotice}</p>
           <p>{t.disclaimer}</p>
           <nav>
             <Link to={langLink('/developers')}>{t.apiLink}</Link>

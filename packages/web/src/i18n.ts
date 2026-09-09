@@ -52,8 +52,6 @@ interface Strings {
   needMental: string;
   needViolence: string;
   urgentHelp: string;
-  urgentHelpBody: string;
-  callNow: string;
   results: string;
   resultsCount: (n: number) => string;
   noResults: string;
@@ -107,18 +105,21 @@ interface Strings {
   language: string;
   skipToContent: string;
   disclaimer: string;
+  /** The word stamped across the page while the site is a draft. */
+  draftMark: string;
+  draftNotice: string;
   aboutLink: string;
   apiLink: string;
 }
 
 const he: Strings = {
   siteName: 'כל השירותים החברתיים',
-  tagline: 'לחפש עזרה, ולמצוא אותה',
-  askPrompt: 'במה אפשר לעזור?',
-  searchPlaceholder: 'לדוגמה: אין לי כסף לאוכל',
+  tagline: 'לחפש שירות, ולמצוא אותו',
+  askPrompt: 'איזה שירות אתם מחפשים?',
+  searchPlaceholder: 'לדוגמה: קייטנה לאנשים עם מוגבלות',
   searchAction: 'חיפוש',
   smartAction: 'חיפוש חכם',
-  smartHint: 'אפשר לכתוב במילים שלכם — למשל "אין לי כסף לאוכל ואני בתל אביב" — והחיפוש החכם יבין למה הכוונה.',
+  smartHint: 'אפשר לכתוב במילים שלכם — למשל "קייטנה לאנשים עם מוגבלות בתל אביב" — והחיפוש החכם יבין למה הכוונה.',
   smartThinking: 'מחפש עבורכם…',
   smartUnderstood: 'מה הבנו מהבקשה',
   smartNoKey: 'החיפוש החכם אינו זמין כרגע. החיפוש הרגיל עובד כרגיל.',
@@ -142,8 +143,6 @@ const he: Strings = {
   needMental: 'מצוקה נפשית',
   needViolence: 'אלימות',
   urgentHelp: 'צריך עזרה עכשיו',
-  urgentHelpBody: 'קווי סיוע שעונים מיד, בכל שעה.',
-  callNow: 'להתקשר עכשיו',
   results: 'תוצאות',
   resultsCount: (n) => (n === 1 ? 'שירות אחד' : `${n} שירותים`),
   noResults: 'לא מצאנו שירות מתאים',
@@ -198,18 +197,21 @@ const he: Strings = {
   skipToContent: 'דילוג לתוכן',
   disclaimer:
     'המידע נאסף ממקורות שונים ועשוי להיות חלקי או לא מעודכן. מומלץ לוודא טלפונית לפני הגעה.',
+  draftMark: 'טיוטה',
+  draftNotice:
+    'אתר בטיוטה. אינו אתר פעיל, והמידע שבו מוצג לצורכי הדגמה בלבד.',
   aboutLink: 'אודות',
   apiLink: 'למפתחים',
 };
 
 const ar: Strings = {
   siteName: 'كل الخدمات الاجتماعية',
-  tagline: 'ابحث عن المساعدة، وجدها',
-  askPrompt: 'كيف يمكننا المساعدة؟',
-  searchPlaceholder: 'مثال: ليس لدي مال للطعام',
+  tagline: 'ابحث عن خدمة، وجدها',
+  askPrompt: 'أي خدمة تبحثون عنها؟',
+  searchPlaceholder: 'مثال: مخيّم صيفي لذوي الإعاقة',
   searchAction: 'بحث',
   smartAction: 'بحث ذكي',
-  smartHint: 'اكتبوا بكلماتكم — مثلاً "ليس لدي مال للطعام وأنا في تل أبيب" — والبحث الذكي سيفهم المقصود.',
+  smartHint: 'اكتبوا بكلماتكم — مثلاً "مخيّم صيفي لذوي الإعاقة في تل أبيب" — والبحث الذكي سيفهم المقصود.',
   smartThinking: 'نبحث لكم…',
   smartUnderstood: 'ما فهمناه من طلبكم',
   smartNoKey: 'البحث الذكي غير متاح حالياً. البحث العادي يعمل كالمعتاد.',
@@ -233,8 +235,6 @@ const ar: Strings = {
   needMental: 'ضائقة نفسية',
   needViolence: 'عنف',
   urgentHelp: 'أحتاج مساعدة الآن',
-  urgentHelpBody: 'خطوط مساعدة تجيب فوراً، في أي ساعة.',
-  callNow: 'اتصل الآن',
   results: 'النتائج',
   resultsCount: (n) => (n === 1 ? 'خدمة واحدة' : `${n} خدمات`),
   noResults: 'لم نجد خدمة مناسبة',
@@ -289,18 +289,21 @@ const ar: Strings = {
   skipToContent: 'تخطّي إلى المحتوى',
   disclaimer:
     'المعلومات مجمّعة من مصادر مختلفة وقد تكون ناقصة أو غير محدّثة. يُنصح بالتأكد هاتفياً قبل الحضور.',
+  draftMark: 'مسودة',
+  draftNotice:
+    'موقع قيد الإعداد. ليس موقعاً فعّالاً، والمعلومات معروضة للعرض التوضيحي فقط.',
   aboutLink: 'حول',
   apiLink: 'للمطوّرين',
 };
 
 const ru: Strings = {
   siteName: 'Все социальные службы',
-  tagline: 'Искать помощь — и находить её',
-  askPrompt: 'Чем помочь?',
-  searchPlaceholder: 'Например: нет денег на еду',
+  tagline: 'Искать услугу — и находить её',
+  askPrompt: 'Какую услугу вы ищете?',
+  searchPlaceholder: 'Например: летний лагерь для людей с инвалидностью',
   searchAction: 'Найти',
   smartAction: 'Умный поиск',
-  smartHint: 'Можно написать своими словами — например «нет денег на еду, я в Тель-Авиве» — и умный поиск поймёт.',
+  smartHint: 'Можно написать своими словами — например «летний лагерь для людей с инвалидностью в Тель-Авиве» — и умный поиск поймёт.',
   smartThinking: 'Ищем для вас…',
   smartUnderstood: 'Как мы поняли запрос',
   smartNoKey: 'Умный поиск сейчас недоступен. Обычный поиск работает.',
@@ -324,8 +327,6 @@ const ru: Strings = {
   needMental: 'Душевное состояние',
   needViolence: 'Насилие',
   urgentHelp: 'Нужна помощь сейчас',
-  urgentHelpBody: 'Горячие линии отвечают сразу, в любое время.',
-  callNow: 'Позвонить',
   results: 'Результаты',
   resultsCount: (n) => `${n} служб`,
   noResults: 'Подходящих служб не найдено',
@@ -380,18 +381,21 @@ const ru: Strings = {
   skipToContent: 'Перейти к содержанию',
   disclaimer:
     'Информация собрана из разных источников и может быть неполной или устаревшей. Перед визитом лучше позвонить.',
+  draftMark: 'ЧЕРНОВИК',
+  draftNotice:
+    'Черновик сайта. Это не действующий сайт, данные показаны только для демонстрации.',
   aboutLink: 'О проекте',
   apiLink: 'Разработчикам',
 };
 
 const en: Strings = {
   siteName: 'Social services directory',
-  tagline: 'Look for help, and find it',
-  askPrompt: 'What do you need?',
-  searchPlaceholder: 'For example: I have no money for food',
+  tagline: 'Look for a service, and find it',
+  askPrompt: 'Which service are you looking for?',
+  searchPlaceholder: 'For example: a summer camp for people with disabilities',
   searchAction: 'Search',
   smartAction: 'Smart search',
-  smartHint: 'You can write in your own words — "I have no money for food and I am in Tel Aviv" — and smart search will work out what you mean.',
+  smartHint: 'You can write in your own words — "a summer camp for people with disabilities in Tel Aviv" — and smart search will work out what you mean.',
   smartThinking: 'Searching for you…',
   smartUnderstood: 'What we understood',
   smartNoKey: 'Smart search is not available right now. Ordinary search works as usual.',
@@ -415,8 +419,6 @@ const en: Strings = {
   needMental: 'Mental health',
   needViolence: 'Violence',
   urgentHelp: 'I need help now',
-  urgentHelpBody: 'Helplines that answer immediately, at any hour.',
-  callNow: 'Call now',
   results: 'Results',
   resultsCount: (n) => (n === 1 ? '1 service' : `${n} services`),
   noResults: 'No matching service found',
@@ -471,6 +473,9 @@ const en: Strings = {
   skipToContent: 'Skip to content',
   disclaimer:
     'This information is collected from several sources and may be incomplete or out of date. Please confirm by phone before travelling.',
+  draftMark: 'DRAFT',
+  draftNotice:
+    'This is a draft. It is not a live service, and the information is shown for demonstration only.',
   aboutLink: 'About',
   apiLink: 'Developers',
 };

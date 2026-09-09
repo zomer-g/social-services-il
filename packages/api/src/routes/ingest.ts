@@ -57,6 +57,11 @@ const BranchSchema = z.object({
   phone_numbers: z.array(z.string().max(50)).max(10).optional(),
   email_address: z.string().email().optional(),
   urls: z.array(UrlSchema).max(10).optional(),
+  source_updated_at: z
+    .string()
+    .datetime({ offset: true })
+    .optional()
+    .describe('When the source last changed this branch. Distinct from when we received it.'),
   national_service: z.boolean().optional().describe('Delivered anywhere in the country; this branch has no point on the map.'),
   location_accuracy: z
     .enum(['rooftop', 'building', 'street', 'locality', 'region', 'approximate', 'unknown'])
@@ -84,6 +89,12 @@ const ServiceSchema = z.object({
   email_address: z.string().email().optional(),
   urls: z.array(UrlSchema).max(10).optional(),
   implements: z.string().max(500).optional(),
+  /**
+   * When the source last changed this record. Distinct from when we received
+   * it, and the only honest answer to "how old is this" — which matters because
+   * assistants are told to relay it before someone acts on a phone number.
+   */
+  source_updated_at: z.string().datetime({ offset: true }).optional(),
   responses: z.array(z.string()).min(1).describe('Response taxonomy ids. At least one, or the service cannot be found.'),
   situations: z.array(z.string()).optional(),
   organization: OrganizationSchema,
@@ -305,14 +316,16 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
     await client.query(
       `INSERT INTO services (id, name, description, details, payment_required, payment_details,
                              urls, phone_numbers, email_address, implements, data_sources,
-                             status, source_id, external_ids)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                             status, source_id, external_ids, source_updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name, description = EXCLUDED.description, details = EXCLUDED.details,
          payment_required = EXCLUDED.payment_required, payment_details = EXCLUDED.payment_details,
          urls = EXCLUDED.urls, phone_numbers = EXCLUDED.phone_numbers,
          email_address = EXCLUDED.email_address, implements = EXCLUDED.implements,
-         status = EXCLUDED.status, updated_at = now()`,
+         status = EXCLUDED.status,
+         source_updated_at = COALESCE(EXCLUDED.source_updated_at, services.source_updated_at),
+         updated_at = now()`,
       [
         serviceId,
         input.name,
@@ -328,6 +341,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
         status,
         ctx.sourceId,
         JSON.stringify({ [sourceSlug]: input.external_id }),
+        input.source_updated_at ?? null,
       ],
     );
 
@@ -402,15 +416,16 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
       await client.query(
         `INSERT INTO branches (id, organization_id, location_id, name, operating_unit, description,
                                address, address_details, urls, phone_numbers, email_address,
-                               status, source_id, external_ids)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                               status, source_id, external_ids, source_updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT (id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id, location_id = EXCLUDED.location_id,
            name = EXCLUDED.name, operating_unit = EXCLUDED.operating_unit,
            description = EXCLUDED.description, address = EXCLUDED.address,
            address_details = EXCLUDED.address_details, urls = EXCLUDED.urls,
            phone_numbers = EXCLUDED.phone_numbers, email_address = EXCLUDED.email_address,
-           status = EXCLUDED.status, updated_at = now()`,
+           status = EXCLUDED.status, updated_at = now(),
+           source_updated_at = COALESCE(EXCLUDED.source_updated_at, branches.source_updated_at)`,
         [
           branchId,
           branchOrgId,
@@ -426,6 +441,7 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
           status,
           ctx.sourceId,
           JSON.stringify({ [sourceSlug]: branch.external_id }),
+          branch.source_updated_at ?? null,
         ],
       );
 

@@ -158,3 +158,54 @@ tr.revoked { opacity: 0.55; }
 }
 
 .actions { display: flex; gap: 0.5rem; margin: 1rem 0; }
+
+/*
+ * The search log.
+ *
+ * The colour carries the one distinction the screen is for: green is a search
+ * that answered, amber a search that ran and found nothing — a gap in the
+ * corpus — and red a search that did not run at all. Amber and red are not the
+ * same problem and do not have the same owner, so they do not look alike.
+ */
+.pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  margin-inline-end: 0.3rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.pill.ok { background: var(--surface-2); color: var(--muted); }
+.pill.empty { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.pill.bad { background: var(--warn-soft); border-color: var(--error); color: var(--error); }
+
+.nowrap { white-space: nowrap; }
+/* The searched phrase is the column the eye scans; everything else is context. */
+.qtext { font-weight: 600; }
+
+label.check { display: flex; align-items: center; gap: 0.35rem; }
+
+.detail {
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin: 0.25rem 0;
+}
+.detail > p { margin: 0.4rem 0; }
+.detail > strong { display: block; margin-top: 0.9rem; }
+
+.answer {
+  margin: 0.4rem 0;
+  padding: 0.6rem 0.8rem;
+  border-inline-start: 3px solid var(--border);
+  background: var(--surface);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  white-space: pre-wrap;
+}
+
+.cardlist { margin: 0.4rem 0; padding-inline-start: 1.4rem; }
+.cardlist li { margin: 0.2rem 0; }
+/* A card the search returned that has since been deleted. */
+.cardlist li.gone { text-decoration: line-through; }

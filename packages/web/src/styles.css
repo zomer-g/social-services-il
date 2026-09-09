@@ -269,16 +269,49 @@ a { color: var(--accent); }
 
 /* ---------- urgent ---------- */
 
+/* A thin strip, not a panel. The page is about finding a service; these
+   numbers are the safety net beside it. They stay legible and tappable, but
+   they no longer take a screenful.
+
+   The links are below the 48px used elsewhere on purpose. They are a row of
+   inline phone numbers rather than the primary controls, and 34px still clears
+   the 24px floor in 2.5.8. */
 .urgent {
-  border: 2px solid var(--urgent);
+  border: 1px solid var(--urgent);
   background: var(--urgent-soft);
   border-radius: var(--radius);
-  padding: 0.9rem 1rem;
-  margin: 1rem 0;
+  padding: 0.35rem 0.6rem;
+  margin: 0.75rem 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+  font-size: 0.85rem;
 }
-.urgent h2 { color: var(--urgent); margin-bottom: 0.25rem; }
-.urgent p { margin-bottom: 0.6rem; font-size: 0.95rem; }
-.urgent .btn { background: var(--urgent); border-color: var(--urgent); color: #fff; }
+.urgent h2 {
+  color: var(--urgent);
+  font-size: 0.85rem;
+  margin: 0;
+  white-space: nowrap;
+}
+.urgent ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.urgent li { margin: 0; }
+.urgent a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 0.3rem;
+  color: var(--urgent);
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 /* ---------- results ---------- */
 
@@ -391,6 +424,53 @@ a { color: var(--accent); }
   color: var(--fg-muted);
   border-top: 1px solid var(--border);
   padding-top: 0.75rem;
+}
+
+/* ---------- draft stamp ---------- */
+
+/*
+ * The site is not live, and a list of helplines invites being acted on. The
+ * word sits over every screen so that nobody mistakes this for the real thing.
+ *
+ * Fixed rather than in the flow, so it survives scrolling; pointer-events off,
+ * so it never intercepts a tap; and faint enough that the text under it keeps
+ * its contrast ratio. It is aria-hidden — the footer carries the same statement
+ * in words for anyone who cannot see it.
+ */
+.draftmark {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  user-select: none;
+  overflow: hidden;
+  font-weight: 800;
+  /* Sized so the whole word still fits across the screen once rotated —
+     a stamp that is clipped into fragments stops reading as a word. */
+  font-size: clamp(3.5rem, 24vw, 18rem);
+  line-height: 1;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  transform: rotate(-24deg);
+  color: var(--urgent);
+  opacity: 0.11;
+}
+
+@media (prefers-color-scheme: dark) {
+  .draftmark { opacity: 0.14; }
+}
+
+/* Printed out, a page without the stamp would be the most convincing forgery
+   of all, so it prints too. */
+@media print {
+  .draftmark { position: absolute; opacity: 0.14; }
+}
+
+.draftnotice {
+  font-weight: 700;
+  color: var(--urgent);
 }
 
 /* ---------- misc ---------- */

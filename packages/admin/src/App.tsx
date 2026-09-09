@@ -14,13 +14,14 @@ import './admin.css';
  * it is typed in here rather than stored, so it never sits in browser storage.
  */
 
-const TABS = ['overview', 'review', 'reports', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
+const TABS = ['overview', 'review', 'reports', 'searches', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'סקירה',
   review: 'ממתין לאישור',
   reports: 'דיווחי טעויות',
+  searches: 'חיפושים',
   sources: 'מקורות',
   mcp: 'שרתי MCP',
   keys: 'מפתחות API',
@@ -112,6 +113,7 @@ export function App() {
         {tab === 'overview' && <Overview />}
         {tab === 'review' && <Review />}
         {tab === 'reports' && <Reports />}
+        {tab === 'searches' && <Searches />}
         {tab === 'sources' && <Sources />}
         {tab === 'mcp' && <McpServers />}
         {tab === 'keys' && <Keys />}
@@ -230,6 +232,7 @@ function Overview() {
     { label: 'דיווחי טעויות פתוחים', key: 'open_reports', warn: true },
     { label: 'כתובות שלא נפתרו', key: 'unresolved_locations', warn: true },
     { label: 'חיפושים ללא תוצאה (30 יום)', key: 'empty_searches_30d', warn: true },
+    { label: 'חיפושים שנכשלו (7 ימים)', key: 'failed_searches_7d', warn: true },
   ];
 
   return (
@@ -360,6 +363,334 @@ function Reports() {
         </article>
       ))}
     </>
+  );
+}
+
+interface SearchRow {
+  id: number;
+  at: string;
+  kind: 'plain' | 'smart' | 'deep';
+  outcome: string;
+  query: string | null;
+  city: string | null;
+  lang: string;
+  has_location: boolean;
+  result_count: number;
+  cards_returned: number | null;
+  duration_ms: number | null;
+  error: string | null;
+  response_ids: string[];
+  situation_ids: string[];
+  tools_used: string[];
+  sources: string[];
+  answer_preview: string | null;
+  has_answer: boolean;
+}
+
+const KIND_LABELS: Record<string, string> = {
+  plain: 'רגיל',
+  smart: 'חכם',
+  deep: 'כל המקורות',
+};
+
+/**
+ * The outcomes, in the order a reader cares about them.
+ *
+ * `empty` is kept apart from the four below it on purpose: a search that ran
+ * correctly over a corpus with nothing in it is a content problem, and the rest
+ * are the search itself breaking. Showing them the same way would hide exactly
+ * the distinction this screen exists to make.
+ */
+const OUTCOME_LABELS: Record<string, string> = {
+  ok: 'הוחזרו תוצאות',
+  empty: 'אין תוצאות במאגר',
+  error: 'שגיאה',
+  declined: 'המודל סירב',
+  rate_limited: 'חריגה ממכסה',
+  unavailable: 'שירות לא זמין',
+  invalid: 'בקשה שגויה',
+};
+
+function outcomeClass(outcome: string): string {
+  if (outcome === 'ok') return 'ok';
+  if (outcome === 'empty') return 'empty';
+  return 'bad';
+}
+
+/**
+ * Every search and what came out of it.
+ *
+ * The screen is built around one question — which searches did not work — and
+ * that question has two answers that used to look identical from here. A search
+ * can run perfectly and find nothing, which means the corpus is missing a
+ * service; or the search itself can fail, which means something is broken. The
+ * list shows both, tells them apart, and opens each row onto the output it
+ * actually produced: the cards, the model's answer, the tools it called, the
+ * error it hit.
+ *
+ * It opens on the failures, because a page that opens on a thousand successful
+ * searches makes the reader do the filtering the screen was built to do.
+ */
+function Searches() {
+  const [failedOnly, setFailedOnly] = useState(true);
+  const [kind, setKind] = useState('');
+  const [term, setTerm] = useState('');
+  const [applied, setApplied] = useState('');
+  const [open, setOpen] = useState<number | null>(null);
+
+  const params = new URLSearchParams();
+  if (failedOnly) params.set('failed', 'true');
+  if (kind) params.set('kind', kind);
+  if (applied) params.set('q', applied);
+
+  const { data, error, reload } = useLoad<{
+    searches: SearchRow[];
+    totals: { outcome: string; kind: string; n: number }[];
+  }>(`/api/admin/searches?${params.toString()}`);
+
+  const totals = data?.totals ?? [];
+  const sum = (predicate: (t: { outcome: string; kind: string }) => boolean) =>
+    totals.filter(predicate).reduce((n, t) => n + t.n, 0);
+
+  return (
+    <>
+      <h1>חיפושים</h1>
+      <p className="muted">
+        מה חיפשו ומה חזר. חיפוש שרץ כראוי ולא מצא כלום הוא חוסר במאגר; חיפוש שנכשל הוא תקלה. השורות
+        נפתחות לתוצר המלא — הכרטיסים שחזרו, התשובה שהוצגה, הכלים שהופעלו והשגיאה.
+      </p>
+
+      <div className="stats">
+        <div className="stat">
+          <span className="value">{sum(() => true)}</span>
+          <span className="label">חיפושים ב־30 הימים האחרונים</span>
+        </div>
+        <div className={`stat ${sum((t) => t.outcome === 'empty') > 0 ? 'warn' : ''}`}>
+          <span className="value">{sum((t) => t.outcome === 'empty')}</span>
+          <span className="label">ללא תוצאות במאגר</span>
+        </div>
+        <div className={`stat ${sum((t) => t.outcome !== 'ok' && t.outcome !== 'empty') > 0 ? 'warn' : ''}`}>
+          <span className="value">{sum((t) => t.outcome !== 'ok' && t.outcome !== 'empty')}</span>
+          <span className="label">נכשלו</span>
+        </div>
+        <div className="stat">
+          <span className="value">{sum((t) => t.kind !== 'plain')}</span>
+          <span className="label">חיפושים חכמים</span>
+        </div>
+      </div>
+
+      <form
+        className="inline"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setApplied(term.trim());
+        }}
+      >
+        <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="חיפוש בטקסט" />
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="">כל המסלולים</option>
+          <option value="plain">רגיל</option>
+          <option value="smart">חכם</option>
+          <option value="deep">כל המקורות</option>
+        </select>
+        <label className="check">
+          <input type="checkbox" checked={failedOnly} onChange={(e) => setFailedOnly(e.target.checked)} />
+          רק מה שלא הצליח
+        </label>
+        <button type="submit" className="btn">
+          סינון
+        </button>
+        <button type="button" className="btn secondary" onClick={reload}>
+          רענון
+        </button>
+      </form>
+
+      {error && <p className="error">{error}</p>}
+      {!data ? (
+        <p className="muted">טוען…</p>
+      ) : data.searches.length === 0 ? (
+        <p className="muted">{failedOnly ? 'כל החיפושים שנרשמו הצליחו.' : 'לא נרשמו חיפושים.'}</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>מתי</th>
+              <th>מסלול</th>
+              <th>מה חיפשו</th>
+              <th>תוצאה</th>
+              <th>כרטיסים</th>
+              <th>זמן</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.searches.map((row) => (
+              <SearchRowView
+                key={row.id}
+                row={row}
+                open={open === row.id}
+                onToggle={() => setOpen(open === row.id ? null : row.id)}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function SearchRowView({ row, open, onToggle }: { row: SearchRow; open: boolean; onToggle: () => void }) {
+  return (
+    <>
+      <tr>
+        <td className="muted nowrap">{new Date(row.at).toLocaleString('he-IL')}</td>
+        <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
+        <td>
+          {row.query ? (
+            <span className="qtext">{row.query}</span>
+          ) : (
+            /* A search with no text is a legitimate one: browsing by category. */
+            <span className="muted">לפי קטגוריה בלבד</span>
+          )}
+          {row.city && <span className="muted"> · {row.city}</span>}
+          {row.has_location && <span className="muted"> · עם מיקום</span>}
+        </td>
+        <td>
+          <span className={`pill ${outcomeClass(row.outcome)}`}>
+            {OUTCOME_LABELS[row.outcome] ?? row.outcome}
+          </span>
+        </td>
+        <td>{row.result_count}</td>
+        <td className="muted nowrap">{row.duration_ms === null ? '—' : `${row.duration_ms} ms`}</td>
+        <td className="rowactions">
+          <button type="button" className="btn small secondary" onClick={onToggle}>
+            {open ? 'סגירה' : 'תוצר'}
+          </button>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={7}>
+            <SearchDetail id={row.id} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/**
+ * The output of one search.
+ *
+ * Cards are looked up again by id rather than replayed from a stored snapshot,
+ * so one that has since been removed shows as missing. "This search returned
+ * four services and three of them no longer exist" is a finding the row count
+ * on its own cannot produce.
+ */
+function SearchDetail({ id }: { id: number }) {
+  const { data, error } = useLoad<{
+    search: Record<string, unknown>;
+    cards: {
+      card_id: string;
+      service_name: string | null;
+      organization_name: string | null;
+      city: string | null;
+      still_present: boolean;
+    }[];
+    names: Record<string, string>;
+    related: { id: number; at: string; kind: string; outcome: string; result_count: number }[];
+  }>(`/api/admin/searches/${id}`);
+
+  if (error) return <p className="error">{error}</p>;
+  if (!data) return <p className="muted">טוען…</p>;
+
+  const event = data.search;
+  const list = (key: string) => ((event[key] as string[] | null) ?? []).filter(Boolean);
+  const categories = [...list('response_ids'), ...list('situation_ids')];
+
+  return (
+    <div className="detail">
+      {event['error'] != null && (
+        <p className="error">
+          <strong>שגיאה:</strong> <code>{String(event['error'])}</code>
+        </p>
+      )}
+
+      {categories.length > 0 && (
+        <p>
+          <strong>קטגוריות שזוהו:</strong>{' '}
+          {categories.map((c) => (
+            <span key={c} className="pill" title={c}>
+              {data.names[c] ?? c}
+            </span>
+          ))}
+        </p>
+      )}
+
+      {list('tools_used').length > 0 && (
+        <p className="muted">
+          <strong>כלים שהופעלו:</strong> {list('tools_used').join(', ')}
+        </p>
+      )}
+      {list('sources').length > 0 && (
+        <p className="muted">
+          <strong>מקורות:</strong> {list('sources').join(', ')}
+        </p>
+      )}
+      {event['unavailable'] != null && (
+        <p className="muted">
+          <strong>מקורות שלא נענו:</strong> <code>{JSON.stringify(event['unavailable'])}</code>
+        </p>
+      )}
+
+      {event['answer'] != null && (
+        <>
+          <strong>התשובה שהוצגה:</strong>
+          <blockquote className="answer">{String(event['answer'])}</blockquote>
+        </>
+      )}
+
+      <strong>הכרטיסים שחזרו ({data.cards.length})</strong>
+      {data.cards.length === 0 ? (
+        <p className="muted">לא חזר אף כרטיס.</p>
+      ) : (
+        <ol className="cardlist">
+          {data.cards.map((c) => (
+            <li key={c.card_id} className={c.still_present ? '' : 'gone'}>
+              {c.still_present ? (
+                <>
+                  {c.service_name} · <span className="muted">{c.organization_name}</span>
+                  {c.city && <span className="muted"> · {c.city}</span>}
+                </>
+              ) : (
+                <span className="muted">
+                  <code>{c.card_id}</code> — הכרטיס כבר אינו קיים
+                </span>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {data.related.length > 0 && (
+        <>
+          <strong>אותו ביטוי בחיפושים אחרים</strong>
+          <p className="muted">ביטוי שנכשל במסלול אחד ועובד באחר הוא תקלה בניתוב, לא שירות חסר.</p>
+          <ul className="cardlist">
+            {data.related.map((r) => (
+              <li key={r.id}>
+                <span className="muted">{new Date(r.at).toLocaleString('he-IL')}</span> ·{' '}
+                {KIND_LABELS[r.kind] ?? r.kind} ·{' '}
+                <span className={`pill ${outcomeClass(r.outcome)}`}>
+                  {OUTCOME_LABELS[r.outcome] ?? r.outcome}
+                </span>{' '}
+                · {r.result_count}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
   );
 }
 

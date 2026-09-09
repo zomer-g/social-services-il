@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { query } from '@ssil/db';
 import { config } from '../config.js';
 import { CORPUS_INSTRUCTIONS, sharedTools, toolsByName } from '../tools.js';
+import { outcomeFor, recordSearch } from '../searchlog.js';
 
 /**
  * Smart search.
@@ -100,14 +101,32 @@ export interface Interpretation {
 }
 
 smartRouter.post('/smart-search', (req: Request, res: Response) => {
-  void handle(req, res).catch((err: Error) => {
+  const started = Date.now();
+  void handle(req, res, started).catch((err: Error) => {
     console.error('[error] smart search:', err.stack ?? err.message);
+    // The searches that throw are the ones an administrator most needs to see,
+    // and until this line they were the only ones that left no trace at all.
+    recordSearch({
+      kind: 'smart',
+      outcome: 'error',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      lang: typeof (req.body as { lang?: unknown })?.lang === 'string' ? (req.body as { lang: string }).lang : 'he',
+      error: err.message,
+      durationMs: Date.now() - started,
+    });
     if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
   });
 });
 
-async function handle(req: Request, res: Response): Promise<void> {
+async function handle(req: Request, res: Response, started: number): Promise<void> {
   if (!config.anthropicApiKey) {
+    recordSearch({
+      kind: 'smart',
+      outcome: 'unavailable',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      error: 'ANTHROPIC_API_KEY is not set',
+      durationMs: Date.now() - started,
+    });
     res.status(503).json({
       error: 'smart_search_unavailable',
       message: 'החיפוש החכם אינו מוגדר בשרת. יש להגדיר ANTHROPIC_API_KEY.',
@@ -117,12 +136,32 @@ async function handle(req: Request, res: Response): Promise<void> {
 
   const parsed = RequestSchema.safeParse(req.body);
   if (!parsed.success) {
+    recordSearch({
+      kind: 'smart',
+      outcome: 'invalid',
+      query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
+      error: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      durationMs: Date.now() - started,
+    });
     res.status(400).json({ error: 'bad_request', message: 'q is required (2–500 characters)' });
     return;
   }
 
+  const { q, lat, lon, lang } = parsed.data;
+
   const key = req.ip ?? 'unknown';
   if (overLimit(key)) {
+    // Logged without the address that was throttled. Knowing that the ceiling
+    // is being hit is an operational fact; knowing whose search it was is not
+    // one this table is allowed to hold.
+    recordSearch({
+      kind: 'smart',
+      outcome: 'rate_limited',
+      query: q,
+      lang,
+      hasLocation: lat !== undefined,
+      durationMs: Date.now() - started,
+    });
     res.status(429).json({
       error: 'rate_limited',
       message: 'יותר מדי חיפושים חכמים בשעה האחרונה. אפשר להשתמש בחיפוש הרגיל.',
@@ -130,7 +169,6 @@ async function handle(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const { q, lat, lon, lang } = parsed.data;
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
   const messages: Anthropic.MessageParam[] = [
@@ -163,6 +201,15 @@ async function handle(req: Request, res: Response): Promise<void> {
     });
 
     if (response.stop_reason === 'refusal') {
+      recordSearch({
+        kind: 'smart',
+        outcome: 'declined',
+        query: q,
+        lang,
+        hasLocation: lat !== undefined,
+        toolsUsed: [...new Set(calls)],
+        durationMs: Date.now() - started,
+      });
       res.status(422).json({
         error: 'declined',
         message: 'לא הצלחנו לעבד את הבקשה הזו. אפשר לנסות לנסח אחרת או להשתמש בחיפוש הרגיל.',
@@ -210,18 +257,24 @@ async function handle(req: Request, res: Response): Promise<void> {
   // model's output. Nothing reaches the page that is not a real record.
   const cards = await loadCards(cardIds.slice(0, 20), lang, lat, lon);
 
-  void query(
-    `INSERT INTO search_events (query, normalized, response_ids, situation_ids, has_location, lang, result_count)
-     VALUES ($1, ssil_normalize($1), $2, $3, $4, $5, $6)`,
-    [
-      q,
-      interpretation.responses.map((r) => r.id),
-      interpretation.situations.map((s) => s.id),
-      lat !== undefined,
-      lang,
-      cards.length,
-    ],
-  ).catch(() => {});
+  // Recorded with the answer and the tool calls, not just the count. A smart
+  // search that produced a confident paragraph over zero cards reads as a
+  // success in every other measure, and it is the failure worth catching.
+  recordSearch({
+    kind: 'smart',
+    outcome: outcomeFor(cards.length),
+    query: q,
+    responseIds: interpretation.responses.map((r) => r.id),
+    situationIds: interpretation.situations.map((s) => s.id),
+    city: interpretation.city ?? null,
+    hasLocation: lat !== undefined,
+    lang,
+    resultCount: cards.length,
+    cardIds: cardIds,
+    answer,
+    toolsUsed: [...new Set(calls)],
+    durationMs: Date.now() - started,
+  });
 
   res.json({
     answer: answer.trim(),

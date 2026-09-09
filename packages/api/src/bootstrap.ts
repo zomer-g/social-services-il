@@ -24,6 +24,27 @@ export async function bootstrap(): Promise<void> {
   }
 
   await rebuildIfFlagged();
+  await pruneSearchLog();
+}
+
+/**
+ * Sweeps old search events.
+ *
+ * The log now holds the sentence somebody typed about their situation and the
+ * answer they were given, which is worth keeping long enough to fix the corpus
+ * and no longer. Run at boot rather than on a timer: this is a low-traffic
+ * service that is redeployed regularly, and a cron container to delete a few
+ * hundred rows would be more moving parts than the job is worth.
+ */
+async function pruneSearchLog(): Promise<void> {
+  try {
+    const { rows } = await query<{ prune_search_events: number }>('SELECT prune_search_events()');
+    const removed = rows[0]?.prune_search_events ?? 0;
+    if (removed > 0) console.log(`[info] pruned ${removed} expired search events`);
+  } catch (err) {
+    // Retention failing must not stop the server from starting.
+    console.error('[warn] could not prune search events:', (err as Error).message);
+  }
 }
 
 /**

@@ -43,9 +43,24 @@ export const CORPUS_INSTRUCTIONS = [
   'For a question about a place, pass lat/lon or a city: many services are local, and the',
   'ones that are not are marked national_service and reachable from anywhere.',
   '',
-  'The data is compiled from public sources and can be out of date. When you relay a',
-  'service, give its phone number and say when the record was last updated, so the person',
-  'can confirm before travelling.',
+  'search_services already returns what a person asks for: the street address, every phone',
+  'number, who the service is for, what it provides, what it costs and how to apply. Answer',
+  'from it directly. get_service is for going deeper on one result, not for filling in gaps',
+  'the search left, and calling it once per result is wasted work.',
+  '',
+  'The same service is often run in many places, and the search shows one of them so that',
+  'one body with hundreds of branches does not crowd out everything else. When a result says',
+  'also_offered_at_other_places, that count is the rest of them: call list_service_locations',
+  'with its card_id to get the branch nearest the person, or the list of towns it operates',
+  'in. Never tell someone a service exists only in the town the search happened to return.',
+  '',
+  'Be concrete. A useful answer names the place, the street and the number to call. Never',
+  'invent any of the three: if a field is absent it is genuinely missing from the record,',
+  'and saying so is better than filling it in.',
+  '',
+  'The data is compiled from public sources and can be out of date. last_updated is when the',
+  'source last changed the record, where the source says so; it is absent when nobody knows.',
+  'Give it when it is there, and tell the person to call before travelling either way.',
 ].join('\n');
 
 export const sharedTools: SharedTool[] = [
@@ -85,24 +100,61 @@ export const sharedTools: SharedTool[] = [
         lang: a.lang ?? 'he',
       });
 
+      // Enough to answer with, in one call.
+      //
+      // The first version returned a name, a city and one phone number, and an
+      // assistant reading that had nothing concrete to say: no street address,
+      // no eligibility, no idea whether it costs money. It could fetch each
+      // result separately, but in practice it answered vaguely instead. What a
+      // person actually asks — where do I go, who is it for, what do I need,
+      // does it cost — is one join away, so it belongs here.
+      const detail = await enrich(
+        result.cards.map((c) => c.card_id),
+        a.lang ?? 'he',
+      );
+
       return {
         total: result.total,
         showing: result.cards.length,
-        services: result.cards.map((c) => ({
-          card_id: c.card_id,
-          name: c.service_name,
-          description: c.service_description,
-          provider: c.organization_name,
-          where: c.national_service ? 'nationwide' : (c.city ?? c.address),
-          distance_km: c.distance_m != null ? Number((c.distance_m / 1000).toFixed(1)) : null,
-          phone: c.phone_numbers[0] ?? null,
-          // Passed through so an assistant can say how fresh a record is rather
-          // than implying it is current.
-          last_updated: c.updated_at,
-          also_available_at: c.also_available_at || undefined,
-          other_organizations: c.other_organizations || undefined,
-          url: `/s/${c.card_id}`,
-        })),
+        services: result.cards.map((c) => {
+          const extra = detail.get(c.card_id);
+          return {
+            card_id: c.card_id,
+            name: c.service_name,
+            description: c.service_description,
+            provider: c.organization_name,
+            provider_kind: c.organization_kind,
+            // Said in words rather than left for the caller to infer from a
+            // null address.
+            where: c.national_service
+              ? 'ניתן בכל הארץ (available anywhere in the country)'
+              : [c.address, c.city].filter(Boolean).join(', ') || null,
+            address: c.national_service ? null : c.address,
+            city: c.city,
+            // Stated plainly: an assistant that reads out a city centroid as an
+            // address sends someone to the wrong street.
+            location_note:
+              !c.national_service && !c.location_accurate
+                ? 'המיקום משוער — כדאי לוודא בטלפון לפני הגעה'
+                : undefined,
+            distance_km: c.distance_m != null ? Number((c.distance_m / 1000).toFixed(1)) : null,
+            phones: c.phone_numbers,
+            how_to_apply: extra?.details ?? undefined,
+            cost: extra?.payment_required ? (extra.payment_details ?? 'כרוך בתשלום') : 'ללא תשלום',
+            for_whom: extra?.intended_for ?? undefined,
+            provides: extra?.provides ?? undefined,
+            links: extra?.urls ?? undefined,
+            // When the record itself last changed, not when the index was
+            // rebuilt, so an assistant can honestly say how old this is.
+            last_updated: c.updated_at,
+            // A service delivered in many places shows one of them here. This
+            // is how a caller learns the others exist and how to reach them.
+            also_offered_at_other_places: c.also_available_at || undefined,
+            by_other_organizations: c.other_organizations || undefined,
+            more_places_tool: c.also_available_at ? 'list_service_locations' : undefined,
+            url: `/s/${c.card_id}`,
+          };
+        }),
         narrow_by: {
           responses: result.facets.responses.slice(0, 8),
           situations: result.facets.situations.slice(0, 8),
@@ -301,6 +353,136 @@ export const sharedTools: SharedTool[] = [
       return rows[0] ?? {};
     },
   },
+  {
+    name: 'list_service_locations',
+    title: 'Where a service is offered',
+    description:
+      'Every place one service is delivered, nearest first when a location is given. Search collapses a service offered in many places down to a single row; this is how to see the rest.',
+    schema: {
+      card_id: z.string().optional().describe('Any card of the service — the one a search returned.'),
+      service_id: z.string().optional().describe('The service id, if that is what you have.'),
+      lat: z.number().optional(),
+      lon: z.number().optional(),
+      city: z.string().optional().describe('Only places in this city.'),
+      limit: z.number().int().min(1).max(200).default(50),
+    },
+    handler: async (args) => {
+      const a = args as {
+        card_id?: string; service_id?: string; lat?: number; lon?: number; city?: string; limit?: number;
+      };
+      if (!a.card_id && !a.service_id) return 'Give either card_id or service_id.';
+
+      const { rows } = await query(
+        `WITH target AS (
+           SELECT collapse_key, service_name
+             FROM cards
+            WHERE ($1::text IS NOT NULL AND card_id = $1)
+               OR ($2::text IS NOT NULL AND service_id = $2)
+            LIMIT 1
+         )
+         SELECT c.card_id, t.service_name, c.organization_name, c.address, c.city,
+                c.phone_numbers, c.national_service, c.location_accurate, c.updated_at,
+                CASE WHEN $3::float8 IS NOT NULL AND c.geom IS NOT NULL
+                     THEN round((ST_Distance(c.geom,
+                          ST_SetSRID(ST_MakePoint($3::float8, $4::float8), 4326)::geography) / 1000.0)::numeric, 1)
+                END AS distance_km
+           FROM cards c
+           JOIN target t ON t.collapse_key = c.collapse_key
+          WHERE ($5::text IS NULL OR c.city = $5::text)
+          ORDER BY
+            CASE WHEN $3::float8 IS NOT NULL AND c.geom IS NOT NULL
+                 THEN ST_Distance(c.geom, ST_SetSRID(ST_MakePoint($3::float8, $4::float8), 4326)::geography)
+            END NULLS LAST,
+            c.city
+          LIMIT $6`,
+        [a.card_id ?? null, a.service_id ?? null, a.lon ?? null, a.lat ?? null, a.city ?? null, a.limit ?? 50],
+      );
+
+      if (rows.length === 0) return 'No service found for that id.';
+
+      return {
+        service_name: (rows[0] as { service_name: string }).service_name,
+        places: rows.length,
+        // Towns first: "is there one near me" is usually answered by a list of
+        // places rather than by fifty addresses.
+        cities: [...new Set(rows.map((r) => (r as { city: string | null }).city).filter(Boolean))],
+        locations: rows.map((r) => {
+          const row = r as Record<string, unknown>;
+          return {
+            card_id: row['card_id'],
+            provider: row['organization_name'],
+            address: row['national_service'] ? null : row['address'],
+            city: row['city'],
+            distance_km: row['distance_km'],
+            phones: row['phone_numbers'],
+            nationwide: row['national_service'],
+            location_note:
+              !row['national_service'] && !row['location_accurate']
+                ? 'המיקום משוער — כדאי לוודא בטלפון'
+                : undefined,
+            url: `/s/${String(row['card_id'])}`,
+          };
+        }),
+      };
+    },
+  },
 ];
+
+/**
+ * The fields a person actually needs that do not live on the card: how to
+ * apply, what it costs, who it is for, and any link.
+ *
+ * Fetched for a whole page of results in one statement rather than left to the
+ * caller to request service by service — a caller that must make ten more round
+ * trips to answer one question will answer it vaguely instead.
+ */
+async function enrich(
+  cardIds: string[],
+  lang: string,
+): Promise<
+  Map<
+    string,
+    {
+      details: string | null;
+      payment_required: boolean;
+      payment_details: string | null;
+      urls: unknown;
+      provides: string[] | null;
+      intended_for: string[] | null;
+    }
+  >
+> {
+  if (cardIds.length === 0) return new Map();
+
+  const { rows } = await query(
+    `SELECT c.card_id, s.details, s.payment_required, s.payment_details,
+            CASE WHEN jsonb_array_length(s.urls) > 0 THEN s.urls END AS urls,
+            (SELECT array_agg(tn.name) FROM unnest(c.response_ids) AS t(id)
+               JOIN taxonomy_names tn ON tn.node_id = t.id AND tn.lang = $2) AS provides,
+            (SELECT array_agg(tn.name) FROM unnest(c.situation_ids) AS t(id)
+               JOIN taxonomy_names tn ON tn.node_id = t.id AND tn.lang = $2) AS intended_for
+       FROM cards c
+       JOIN services s ON s.id = c.service_id
+      WHERE c.card_id = ANY($1::text[])`,
+    [cardIds, lang],
+  );
+
+  return new Map(
+    rows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return [
+        String(row['card_id']),
+        {
+          details: (row['details'] as string) ?? null,
+          payment_required: Boolean(row['payment_required']),
+          payment_details: (row['payment_details'] as string) ?? null,
+          urls: row['urls'] ?? null,
+          provides: (row['provides'] as string[]) ?? null,
+          intended_for: (row['intended_for'] as string[]) ?? null,
+        },
+      ];
+    }),
+  );
+}
 
 export const toolsByName = new Map(sharedTools.map((t) => [t.name, t]));
