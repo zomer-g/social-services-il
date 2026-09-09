@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { autocomplete, getCard, reportError, search, type Card, type CardDetail, type Suggestion } from './api.js';
 import { ActionCard, UrgentBar, useGeolocation, useSaved } from './components.js';
+import { AskPanel } from './ask.js';
 import { useSearchModes } from './smart.js';
 import { stringsFor, type Lang } from './i18n.js';
 
@@ -129,6 +130,11 @@ export function HomePage({ lang }: { lang: Lang }) {
             {modes.deep ? ' ' + t.deepHint : ''}
           </p>
         )}
+
+        {/* The second way in, next to the first rather than on its own page.
+            Someone who cannot name what they need should not have to find a
+            different screen to say so. */}
+        <AskPanel lang={lang} available={modes.smart} />
 
         {suggestions.length > 0 && (
           <ul className="suggestions">

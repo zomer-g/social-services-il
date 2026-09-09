@@ -25,6 +25,17 @@ interface Strings {
   siteName: string;
   tagline: string;
   askPrompt: string;
+  askTitle: string;
+  askLead: string;
+  askLabel: string;
+  askPlaceholder: string;
+  askAction: string;
+  askWorking: string;
+  askNote: string;
+  askFailed: string;
+  askEmpty: string;
+  askCaveat: string;
+  askUnderstood: string;
   searchPlaceholder: string;
   searchAction: string;
   smartAction: string;
@@ -117,6 +128,17 @@ const he: Strings = {
   siteName: 'כל השירותים החברתיים',
   tagline: 'לחפש שירות, ולמצוא אותו',
   askPrompt: 'איזה שירות אתם מחפשים?',
+  askTitle: 'לא בטוחים איך זה נקרא? כתבו במילים שלכם',
+  askLead: 'תארו את המצב במשפט, ותקבלו תשובה כתובה עם כתובות ומספרי טלפון — במקום רשימת תוצאות.',
+  askLabel: 'תיאור המצב במילים שלכם',
+  askPlaceholder: 'למשל: אין לי כסף לאוכל ואני גר בירושלים',
+  askAction: 'קבלו תשובה',
+  askWorking: 'מחפשים ומנסחים תשובה…',
+  askNote: 'לוקח כמה שניות. החיפוש הרגיל למעלה מיידי.',
+  askFailed: 'לא הצלחנו להשיב כרגע. אפשר להשתמש בחיפוש הרגיל למעלה.',
+  askEmpty: 'לא נמצאה תשובה לשאלה הזו. נסו לנסח אחרת, או השתמשו בחיפוש הרגיל.',
+  askCaveat: 'המידע נאסף ממקורות ציבוריים ועשוי להתיישן. כדאי להתקשר לפני שמגיעים.',
+  askUnderstood: 'הבנו שאתם מחפשים:',
   searchPlaceholder: 'לדוגמה: קייטנה לאנשים עם מוגבלות',
   searchAction: 'חיפוש',
   smartAction: 'חיפוש חכם',
@@ -210,6 +232,17 @@ const ar: Strings = {
   siteName: 'كل الخدمات الاجتماعية',
   tagline: 'ابحث عن خدمة، وجدها',
   askPrompt: 'أي خدمة تبحثون عنها؟',
+  askTitle: 'لا تعرفون ما اسمها؟ اكتبوا بكلماتكم',
+  askLead: 'صِفوا الوضع بجملة، وستحصلون على إجابة مكتوبة تتضمّن العناوين وأرقام الهاتف — بدل قائمة نتائج.',
+  askLabel: 'وصف الوضع بكلماتكم',
+  askPlaceholder: 'مثلاً: لا أملك مالاً للطعام وأسكن في القدس',
+  askAction: 'احصلوا على إجابة',
+  askWorking: 'نبحث ونصوغ إجابة…',
+  askNote: 'يستغرق بضع ثوانٍ. البحث العادي في الأعلى فوري.',
+  askFailed: 'تعذّر الردّ الآن. يمكنكم استخدام البحث العادي في الأعلى.',
+  askEmpty: 'لم نجد إجابة لهذا السؤال. جرّبوا صياغة أخرى أو استخدموا البحث العادي.',
+  askCaveat: 'المعلومات مجمّعة من مصادر عامة وقد تكون قديمة. يُفضّل الاتصال قبل الحضور.',
+  askUnderstood: 'فهمنا أنكم تبحثون عن:',
   searchPlaceholder: 'مثال: مخيّم صيفي لذوي الإعاقة',
   searchAction: 'بحث',
   smartAction: 'بحث ذكي',
@@ -303,6 +336,17 @@ const ru: Strings = {
   siteName: 'Все социальные службы',
   tagline: 'Искать услугу — и находить её',
   askPrompt: 'Какую услугу вы ищете?',
+  askTitle: 'Не знаете, как это называется? Напишите своими словами',
+  askLead: 'Опишите ситуацию одним предложением и получите написанный ответ с адресами и телефонами — вместо списка результатов.',
+  askLabel: 'Описание ситуации своими словами',
+  askPlaceholder: 'Например: у меня нет денег на еду, я живу в Иерусалиме',
+  askAction: 'Получить ответ',
+  askWorking: 'Ищем и формулируем ответ…',
+  askNote: 'Займёт несколько секунд. Обычный поиск выше — мгновенный.',
+  askFailed: 'Сейчас не удалось ответить. Воспользуйтесь обычным поиском выше.',
+  askEmpty: 'Ответ на этот вопрос не найден. Попробуйте иначе или используйте обычный поиск.',
+  askCaveat: 'Данные собраны из открытых источников и могут устареть. Позвоните перед поездкой.',
+  askUnderstood: 'Мы поняли, что вы ищете:',
   searchPlaceholder: 'Например: летний лагерь для людей с инвалидностью',
   searchAction: 'Найти',
   smartAction: 'Умный поиск',
@@ -396,6 +440,17 @@ const en: Strings = {
   siteName: 'Social services directory',
   tagline: 'Look for a service, and find it',
   askPrompt: 'Which service are you looking for?',
+  askTitle: 'Not sure what it is called? Write it in your own words',
+  askLead: 'Describe the situation in a sentence and get a written answer with addresses and phone numbers — instead of a list of results.',
+  askLabel: 'Describe your situation in your own words',
+  askPlaceholder: 'For example: I have no money for food and I live in Jerusalem',
+  askAction: 'Get an answer',
+  askWorking: 'Searching and writing an answer…',
+  askNote: 'Takes a few seconds. The ordinary search above is instant.',
+  askFailed: 'We could not answer just now. You can use the ordinary search above.',
+  askEmpty: 'No answer was found for that. Try wording it differently, or use the ordinary search.',
+  askCaveat: 'This is compiled from public sources and can be out of date. It is worth calling before you travel.',
+  askUnderstood: 'We understood you are looking for:',
   searchPlaceholder: 'For example: a summer camp for people with disabilities',
   searchAction: 'Search',
   smartAction: 'Smart search',

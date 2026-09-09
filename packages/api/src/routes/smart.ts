@@ -60,7 +60,49 @@ export const RequestSchema = z.object({
   lat: z.number().min(-90).max(90).optional(),
   lon: z.number().min(-180).max(180).optional(),
   lang: z.enum(['he', 'ar', 'ru', 'en']).default('he'),
+  /**
+   * How the answer is shaped.
+   *
+   * 'brief' is a caption over a list of cards: the cards are the result, and a
+   * paragraph repeating them would waste the space. 'prose' is the other way
+   * round — the writing is the result, so it has to carry the address, the
+   * number to call and what it costs, because there is nothing underneath it
+   * doing that job.
+   */
+  format: z.enum(['brief', 'prose']).default('brief'),
 });
+
+const CLOSING = {
+  brief: [
+    'Then reply with a short paragraph — three sentences at most — in the language the person',
+    'wrote in. Say what you understood them to need and what you found. Do not list the services:',
+    'they are shown to the person as cards underneath your answer, so listing them repeats what',
+    'they can already see. If the corpus has little for this need, say so plainly.',
+  ],
+  prose: [
+    'Then write the answer itself, in the language the person wrote in. Nothing is shown underneath',
+    'it — what you write is the whole of what they get, so it has to be enough to act on.',
+    '',
+    'Open with one sentence saying what you understood them to need. Then take the services worth',
+    'their time — usually three to six, fewer if the corpus genuinely has less — and give each one',
+    'a short paragraph of its own carrying:',
+    '  - what it is and who runs it,',
+    '  - where to go: the street address, or that it is available anywhere in the country,',
+    '  - the number to call, written in full so it can be dialled,',
+    '  - whatever decides if it is for them: who it is for, what it costs, how to apply.',
+    '',
+    'search_services returns all of that already. Do not call get_service once per result to',
+    'assemble it.',
+    '',
+    'Leave out what the record does not have rather than filling it in, and say so where it',
+    'matters: "there is no phone number on this record" is useful, an invented number is',
+    'dangerous. Where a service runs in many places, say so and name the nearest, rather than',
+    'implying it exists only in the town that happened to come back.',
+    '',
+    'Close with one line on what to do first, and that it is worth calling before travelling',
+    'because these records can be out of date.',
+  ],
+};
 
 const SYSTEM = [
   CORPUS_INSTRUCTIONS,
@@ -77,15 +119,17 @@ const SYSTEM = [
   '4. If the first search returns nothing, broaden: drop the situation filter, or move up to a',
   '   parent category. Do not give up after one attempt.',
   '',
-  'Then reply with a short paragraph — three sentences at most — in the language the person',
-  'wrote in. Say what you understood them to need and what you found. Do not list the services:',
-  'they are shown to the person as cards underneath your answer, so listing them repeats what',
-  'they can already see. Do not invent a service, a phone number or an address; everything shown',
-  'comes from the tools. If the corpus has little for this need, say so plainly.',
+  'Never invent a service, a phone number or an address; everything you say comes from the tools.',
   '',
   'Write plainly, the way you would speak to someone who is tired and worried. No bureaucratic',
-  'register, no bullet points, no headings.',
+  'register, no headings, no markdown tables.',
+  '__CLOSING__',
 ].join('\n');
+
+/** The prompt for one shape of answer. */
+function systemFor(format: 'brief' | 'prose'): string {
+  return SYSTEM.replace('__CLOSING__', ['', ...CLOSING[format]].join('\n'));
+}
 
 /** Zod shapes are what MCP wants; the Messages API wants JSON Schema. */
 const anthropicTools: Anthropic.Tool[] = sharedTools.map((tool) => ({
@@ -147,7 +191,7 @@ async function handle(req: Request, res: Response, started: number): Promise<voi
     return;
   }
 
-  const { q, lat, lon, lang } = parsed.data;
+  const { q, lat, lon, lang, format } = parsed.data;
 
   const key = req.ip ?? 'unknown';
   if (overLimit(key)) {
@@ -191,11 +235,13 @@ async function handle(req: Request, res: Response, started: number): Promise<voi
   for (let turn = 0; turn < 6; turn += 1) {
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4096,
+      // A written answer carrying four or five addresses and phone numbers
+      // needs more room than a three-sentence caption.
+      max_tokens: format === 'prose' ? 8192 : 4096,
       // Low effort deliberately: the task is to pick categories and run a
       // search, and someone waiting on a search page feels every second.
       output_config: { effort: 'low' },
-      system: SYSTEM,
+      system: systemFor(format),
       tools: anthropicTools,
       messages,
     });

@@ -732,3 +732,122 @@ a { color: var(--accent); }
   width: 100%;
   cursor: pointer;
 }
+
+/* Asking in your own words.
+   Set apart from the search form above it so the two read as different ways
+   in rather than one control with an extra button, but kept inside the hero
+   so it is not something you have to scroll to find. */
+.ask {
+  margin: var(--gap) auto 0;
+  max-width: var(--page);
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: start;
+}
+.ask h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  line-height: 1.5;
+  color: var(--fg);
+}
+.ask-lead {
+  margin: 0 0 12px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+.ask textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  font: inherit;
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--bg);
+  resize: vertical;
+  min-height: 5.5rem;
+}
+.ask textarea:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap);
+  margin-top: var(--gap);
+}
+.ask-actions .btn { min-height: var(--tap); }
+.ask-actions .hint { margin: 0; }
+.ask button[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+.ask-answer:empty { display: none; }
+.ask-working {
+  margin: var(--gap) 0 0;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.ask-error {
+  margin: var(--gap) 0 0;
+  padding: 12px;
+  border-radius: 10px;
+  color: var(--fg);
+  background: var(--urgent-soft);
+  border: 1px solid var(--urgent);
+}
+
+/* The answer is the result here, not a caption over one, so it is set as
+   something to read: a comfortable measure and generous leading. */
+.ask-prose {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  line-height: 1.75;
+  color: var(--fg);
+}
+.ask-prose:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 4px;
+}
+.ask-prose p { margin: 0 0 14px; }
+.ask-prose ul { margin: 0 0 14px; padding-inline-start: 22px; }
+.ask-prose li { margin-bottom: 6px; line-height: 1.7; }
+
+/* A phone number mid-sentence is what most people came for, so it gets a
+   target of its own rather than only a colour. */
+.ask-prose a.tel {
+  display: inline-block;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--fg);
+  background: var(--accent-soft);
+  text-decoration-thickness: 2px;
+}
+.ask-prose a.tel:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ask-understood {
+  margin: var(--gap) 0 0;
+  color: var(--fg-muted);
+}
+.ask-understood .chip {
+  display: inline-block;
+  margin: 4px 4px 0 0;
+  padding: 2px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--fg);
+}
+.ask-caveat {
+  margin: var(--gap) 0 0;
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
