@@ -165,6 +165,20 @@ A few decisions are load-bearing and easy to undo by accident:
   always includes nationwide services.
 - **Cards record why a row was excluded** instead of dropping it silently, so
   "why is my service not showing" is answerable in the admin.
+- **A search records its outcome, not just its result count.** Zero rows had been
+  the only failure the log could express, and it conflated two different
+  problems with two different owners: a search that ran correctly over a corpus
+  with nothing in it, and a search that never ran — one that threw, that the
+  model declined, that hit the rate limit, or that reached a source which was
+  down. The second kind was worse than unmeasured: smart search logged only its
+  successes and deep search logged nothing at all, so the searches most worth
+  reading were exactly the ones missing. Every route now writes through one
+  helper on every exit, and the admin's search log opens each row onto what it
+  actually produced — the cards, the answer shown, the tools called, the error.
+  Cards are resolved by id at read time rather than snapshotted, so one that has
+  since been deleted shows as missing instead of as a row that still exists.
+  Still no identifier: what was asked and what came back, never who asked, which
+  is also why the log is swept on a timer rather than kept.
 - **The scheduler runs in-process.** Each channel on the host gets its own
   Postgres, so a separate worker channel would connect to an empty database.
 - **The search predicate is assembled in JavaScript**, not guarded with
