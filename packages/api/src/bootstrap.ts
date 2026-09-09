@@ -64,11 +64,11 @@ async function rebuildIfFlagged(): Promise<void> {
 
   console.log(`[info] rebuilding cards (${reason})`);
   const started = Date.now();
-  const built = await query<{ rebuild_cards: number }>('SELECT rebuild_cards()');
+  const built = await query<{ rebuild_all: number }>('SELECT rebuild_all()');
   await query('SELECT refresh_taxonomy_counts()');
   await query(`DELETE FROM system_state WHERE key = 'cards_need_rebuild'`);
   console.log(
-    `[info] rebuilt ${built.rows[0]?.rebuild_cards ?? 0} cards in ${Date.now() - started}ms`,
+    `[info] rebuilt ${built.rows[0]?.rebuild_all ?? 0} cards in ${Date.now() - started}ms`,
   );
 }
 

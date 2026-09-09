@@ -100,21 +100,30 @@ const DEFAULT_LIMIT = 20;
 /** Distance at which the proximity term has fallen to half. */
 const PROXIMITY_HALF_LIFE_KM = 5;
 
-type MatchMode = 'none' | 'exact' | 'fuzzy';
+type MatchMode = 'none' | 'exact' | 'any' | 'fuzzy';
 
 export async function searchCards(params: SearchParams): Promise<SearchResponse> {
   const q = params.q?.trim() || undefined;
 
-  // The index match is the fast path and answers almost everything. Trigram
-  // similarity is the rescue for a misspelling, and it cannot share the index
-  // with the full-text match, so it runs only when the exact pass found nothing
-  // — which is precisely when someone needs it.
+  // Three passes, each tried only when the one before it found nothing, so a
+  // query that works pays for exactly one.
+  //
+  // The strict match is the fast path and answers almost everything. When it
+  // comes back empty there are two quite different reasons, and they were being
+  // treated as one: the words may be misspelled, or they may each be spelled
+  // correctly and simply never occur together. Trigram similarity fixes the
+  // first and can do nothing about the second, so "אוכל חינם בירושלים" returned
+  // nothing over a corpus with 391 food services. The relaxed pass runs in
+  // between: same terms, any of them rather than all, ranked so that cards
+  // matching more of them come first.
   const exact = await run(params, q ? 'exact' : 'none');
-  if (q && exact.total === 0) {
-    const fuzzy = await run(params, 'fuzzy');
-    if (fuzzy.total > 0) return fuzzy;
-  }
-  return exact;
+  if (!q || exact.total > 0) return exact;
+
+  const loose = await run(params, 'any');
+  if (loose.total > 0) return loose;
+
+  const fuzzy = await run(params, 'fuzzy');
+  return fuzzy.total > 0 ? fuzzy : exact;
 }
 
 async function run(params: SearchParams, mode: MatchMode): Promise<SearchResponse> {
@@ -137,10 +146,13 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
 
   if (mode !== 'none' && q) {
     const term = p(q);
-    if (mode === 'exact') {
-      // Written against the column directly, so the GIN index applies.
-      where.push(`c.search_doc @@ ssil_tsquery(${term}, true)`);
-      textRank = `ts_rank_cd(c.search_doc, ssil_tsquery(${term}, true), 32)`;
+    if (mode === 'exact' || mode === 'any') {
+      // Written against the column directly, so the GIN index applies — to the
+      // relaxed query as much as the strict one; they differ only in how the
+      // terms are combined.
+      const fn = mode === 'exact' ? 'ssil_tsquery' : 'ssil_tsquery_any';
+      where.push(`c.search_doc @@ ${fn}(${term}, true)`);
+      textRank = `ts_rank_cd(c.search_doc, ${fn}(${term}, true), 32)`;
     } else {
       // word_similarity, not similarity. Plain `%` compares whole strings, so a
       // six-character query against a four-hundred-character document scores
@@ -157,7 +169,14 @@ async function run(params: SearchParams, mode: MatchMode): Promise<SearchRespons
 
   if (params.responses?.length) where.push(`c.response_ids_all && ${p(params.responses)}::text[]`);
   if (params.situations?.length) where.push(`c.situation_ids_all && ${p(params.situations)}::text[]`);
-  if (params.city) where.push(`c.city = ${p(params.city)}`);
+  if (params.city) {
+    // Resolved, not compared. The corpus spells "קריית ביאליק" with two yods
+    // and "קרית מוצקין" with one, and a caller cannot know which; see
+    // migration 019. Falling back to the literal value means a place the
+    // resolver has never heard of behaves exactly as it did before.
+    const city = p(params.city);
+    where.push(`c.city = COALESCE(ssil_resolve_city(${city}), ${city})`);
+  }
   if (params.organizationId) where.push(`c.organization_id = ${p(params.organizationId)}`);
   if (params.nationalService === 'only') where.push('c.national_service');
   if (params.nationalService === 'exclude') where.push('NOT c.national_service');

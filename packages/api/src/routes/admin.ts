@@ -36,7 +36,7 @@ adminRouter.post(
   '/rebuild',
   handle(async (_req, res) => {
     const started = Date.now();
-    const { rows } = await query<{ rebuild_cards: number }>('SELECT rebuild_cards()');
+    const { rows } = await query<{ rebuild_all: number }>('SELECT rebuild_all()');
     await query('SELECT refresh_taxonomy_counts()');
 
     const rejections = await query<{ reason: string; n: number }>(
@@ -44,7 +44,7 @@ adminRouter.post(
     );
 
     res.json({
-      cards: rows[0]?.rebuild_cards ?? 0,
+      cards: rows[0]?.rebuild_all ?? 0,
       rejected: Object.fromEntries(rejections.rows.map((r) => [r.reason, r.n])),
       duration_ms: Date.now() - started,
     });
@@ -71,7 +71,7 @@ adminRouter.post(
     const clear = req.query['clear'] === 'true';
     if (clear) {
       await clearFixtures();
-      await query('SELECT rebuild_cards()');
+      await query('SELECT rebuild_all()');
       await query('SELECT refresh_taxonomy_counts()');
       res.json({ cleared: true });
       return;
@@ -90,9 +90,9 @@ adminRouter.post(
     }
 
     const result = await loadFixtures();
-    const built = await query<{ rebuild_cards: number }>('SELECT rebuild_cards()');
+    const built = await query<{ rebuild_all: number }>('SELECT rebuild_all()');
     await query('SELECT refresh_taxonomy_counts()');
-    res.json({ ...result, cards: built.rows[0]?.rebuild_cards ?? 0 });
+    res.json({ ...result, cards: built.rows[0]?.rebuild_all ?? 0 });
   }),
 );
 
@@ -489,7 +489,7 @@ adminRouter.post(
            SELECT organization_id FROM service_organizations WHERE service_id = $1)`,
         [entityId],
       );
-      await query('SELECT rebuild_cards()');
+      await query('SELECT rebuild_all()');
       await query('SELECT refresh_taxonomy_counts()');
     }
 
