@@ -1,5 +1,5 @@
 {
-  "description": "The shape one agreement produces. Every key is required; a value the document does not carry is null rather than absent, because a strict schema cannot express 'sometimes there'. Nulls are dropped before anything is pushed. The objects under `services` are, once nulls are dropped, exactly the payload POST /api/v1/ingest/match and POST /api/v1/ingest/services take.",
+  "description": "The shape one agreement produces. Every key is required. Text the document does not carry is an empty string, and a list it does not carry is empty; only payment_required and annual_value_ils use null, because for those two 'not stated' and 'no' are different answers. Structured outputs allow at most 16 union-typed parameters, which is why text is not nullable here. Empty values are dropped before anything is pushed, and the objects under services are then exactly the payload POST /api/v1/ingest/match and POST /api/v1/ingest/services take.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -46,68 +46,28 @@
           ]
         },
         "authority": {
-          "description": "The body paying: a ministry, a municipality, a statutory corporation.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "The body paying: a ministry, a municipality, a statutory corporation. Empty string when the document does not say."
         },
         "provider": {
-          "description": "The body that will deliver the service to the public. This is the organization on the service record, not the authority.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "The body that will deliver the service to the public. This is the organization on the service record, not the authority. Empty string when the document does not say."
         },
         "provider_registration_number": {
-          "description": "מספר עמותה / ח.פ. — 9 digits. This is what lets the same provider from two sources meet, so copy it exactly and never guess it.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "מספר עמותה / ח.פ. — 9 digits. This is what lets the same provider from two sources meet, so copy it exactly and never guess it. Empty string when the document does not say."
         },
         "signed_on": {
-          "description": "ISO date, YYYY-MM-DD.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "ISO date, YYYY-MM-DD. Empty string when the document does not say."
         },
         "starts_on": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "Empty string when the document does not say."
         },
         "ends_on": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "Empty string when the document does not say."
         },
         "annual_value_ils": {
           "anyOf": [
@@ -175,15 +135,8 @@
           "description": "True when the agreement's end date has passed. Judged against the date given in the request, never against your own idea of today."
         },
         "beneficiary": {
-          "description": "Who receives what is bought, in the document's own words. A person in distress, or the authority itself — this is the question the verdict turns on.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "type": "string",
+          "description": "Who receives what is bought, in the document's own words. A person in distress, or the authority itself — this is the question the verdict turns on. Empty string when the document does not say."
         }
       }
     },
@@ -231,26 +184,12 @@
             "description": "The programme name, the provider's own name for it, the ministry's name for it. Used to find the service if it is already in the corpus."
           },
           "description": {
-            "description": "Two or three sentences: what a person gets. Written for the person, not for the auditor.",
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "Two or three sentences: what a person gets. Written for the person, not for the auditor. Empty string when the document does not say."
           },
           "details": {
-            "description": "Eligibility, opening hours, how to apply, what to bring — as the document states them.",
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "Eligibility, opening hours, how to apply, what to bring — as the document states them. Empty string when the document does not say."
           },
           "payment_required": {
             "description": "true when the recipient pays anything, false only when the document says it is free to them, null when it does not say. Payment by the authority to the provider is not payment by the recipient.",
@@ -264,14 +203,8 @@
             ]
           },
           "payment_details": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "Empty string when the document does not say."
           },
           "phone_numbers": {
             "type": "array",
@@ -281,14 +214,8 @@
             "description": "Numbers a member of the public can call to reach the service. Never the contract manager's line."
           },
           "email_address": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "Empty string when the document does not say."
           },
           "urls": {
             "type": "array",
@@ -304,39 +231,19 @@
                   "type": "string"
                 },
                 "title": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Empty string when the document does not say."
                 }
               }
             }
           },
           "implements": {
-            "description": "The programme or agreement this delivers, in words: \"הסכם התקשרות 12/2024 עם עיריית חיפה\".",
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "The programme or agreement this delivers, in words: \"הסכם התקשרות 12/2024 עם עיריית חיפה\". Empty string when the document does not say."
           },
           "source_updated_at": {
-            "description": "ISO 8601 with an offset. The date the agreement was signed or last amended — how old this record is.",
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "string",
+            "description": "ISO 8601 with an offset. The date the agreement was signed or last amended — how old this record is. Empty string when the document does not say."
           },
           "responses": {
             "type": "array",
@@ -371,60 +278,28 @@
             ],
             "properties": {
               "id": {
-                "description": "The provider's registration number, digits only, when the document states it. Nothing else goes here.",
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "The provider's registration number, digits only, when the document states it. Nothing else goes here. Empty string when the document does not say."
               },
               "external_id": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "Empty string when the document does not say."
               },
               "name": {
                 "type": "string",
                 "description": "The provider. Not the authority."
               },
               "short_name": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "Empty string when the document does not say."
               },
               "kind": {
-                "description": "One of: עמותה, חברה לתועלת הציבור, משרד ממשלתי, רשות מקומית, תאגיד סטטוטורי, חברה עסקית, מוסד ציבורי. Null when the document does not say.",
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "One of: עמותה, חברה לתועלת הציבור, משרד ממשלתי, רשות מקומית, תאגיד סטטוטורי, חברה עסקית, מוסד ציבורי. Null when the document does not say. Empty string when the document does not say."
               },
               "purpose": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "Empty string when the document does not say."
               },
               "phone_numbers": {
                 "type": "array",
@@ -433,14 +308,8 @@
                 }
               },
               "email_address": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+                "type": "string",
+                "description": "Empty string when the document does not say."
               },
               "urls": {
                 "type": "array",
@@ -456,14 +325,8 @@
                       "type": "string"
                     },
                     "title": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                      "type": "string",
+                      "description": "Empty string when the document does not say."
                     }
                   }
                 }
@@ -491,45 +354,20 @@
                   "type": "string"
                 },
                 "name": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Empty string when the document does not say."
                 },
                 "operating_unit": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Empty string when the document does not say."
                 },
                 "address": {
-                  "description": "Street and number as written. Do not invent one.",
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Street and number as written. Do not invent one. Empty string when the document does not say."
                 },
                 "city": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Empty string when the document does not say."
                 },
                 "phone_numbers": {
                   "type": "array",
@@ -538,14 +376,8 @@
                   }
                 },
                 "email_address": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "type": "string",
+                  "description": "Empty string when the document does not say."
                 },
                 "national_service": {
                   "type": "boolean"

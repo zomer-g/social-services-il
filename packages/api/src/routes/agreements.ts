@@ -129,7 +129,10 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
 
     let extraction: Extraction;
     try {
-      extraction = JSON.parse(answer) as Extraction;
+      // Text the document does not carry comes back as "" — the schema cannot
+      // make text nullable (see prompts/agreement-extraction.schema.json) — and
+      // everything downstream means "absent" by null, so it is converted once, here.
+      extraction = blankToNull(JSON.parse(answer)) as Extraction;
     } catch {
       res.status(502).json({ error: 'unparseable', message: answer.slice(0, 500) });
       return;
@@ -616,6 +619,16 @@ function validate(extraction: Extraction): string[] {
   }
   if (extraction.verdict?.expired) warnings.push('תוקף ההסכם פג');
   return warnings;
+}
+
+/** "" becomes null, all the way down; a blank entry in a list is dropped. */
+function blankToNull(value: unknown): unknown {
+  if (typeof value === 'string') return value.trim() === '' ? null : value;
+  if (Array.isArray(value)) return value.map(blankToNull).filter((v) => v !== null);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankToNull(v)]));
+  }
+  return value;
 }
 
 function slug(value: string): string {

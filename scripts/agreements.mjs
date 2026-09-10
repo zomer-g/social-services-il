@@ -213,7 +213,9 @@ async function readDocument(file, prompt, schema) {
   const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
   let extraction;
   try {
-    extraction = message.parsed_output ?? JSON.parse(text);
+    // "" is how the schema says "not in the document" (text cannot be nullable
+    // there); the rest of this script means that by null, so convert once.
+    extraction = blankToNull(message.parsed_output ?? JSON.parse(text));
   } catch {
     throw new Error(`the answer was not JSON: ${text.slice(0, 200)}`);
   }
@@ -462,6 +464,16 @@ function countReview(results) {
 function forApi(service) {
   const { confidence, source_quotes, ...rest } = service;
   return stripNulls(rest);
+}
+
+/** "" becomes null, all the way down; a blank entry in a list is dropped. */
+function blankToNull(value) {
+  if (typeof value === 'string') return value.trim() === '' ? null : value;
+  if (Array.isArray(value)) return value.map(blankToNull).filter((v) => v !== null);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankToNull(v)]));
+  }
+  return value;
 }
 
 function stripNulls(value) {

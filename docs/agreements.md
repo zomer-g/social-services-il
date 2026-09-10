@@ -151,6 +151,45 @@ A trust level below 70 means everything this source pushes waits for review —
 which is the right setting until a few dozen documents have been checked by
 hand. Raising it later is one call.
 
+## Trying it on a handful first
+
+Before an archive, a dozen documents — and the admin's **הסכמים** tab exists for
+exactly that. It takes a PDF or a text file, runs the same prompt and the same
+matcher as the script, and shows three things side by side: the verdict and the
+services it extracted, what the corpus already holds for each one, and what that
+document cost.
+
+The cost is split the way it behaves at scale. The prompt carries the whole
+taxonomy and is identical for every document, so it is written to the model's
+cache once and read back at a tenth of the price after that. The screen
+therefore projects from the **marginal** price — what a document costs once the
+prompt is already cached — rather than from the first document's total, which
+pays for the cache write and would overstate a ten-thousand-document bill
+several times over. Read documents one after another on the screen and the
+projection for 100, 1,000 and 10,000 settles as the sample grows.
+
+Acting from the screen is one service and one click at a time, on purpose: it is
+for building confidence, and volume belongs in the script. A link is confirmed at
+once, since a person pressing the button is the review a proposed link would
+wait for. A created service is a **draft** in the review queue, because it was
+read out of a PDF by a model and publication is a person's decision.
+
+## The schema is a subset of JSON Schema
+
+Structured outputs accept a subset: no `$comment`, no numeric or length bounds,
+no type arrays — and at most **16 union-typed parameters** in the whole schema,
+because each one multiplies the cost of compiling it. The extraction schema has
+two dozen optional text fields, so text cannot be nullable: a field the document
+does not carry is `""`, converted back to `null` the moment the answer is parsed,
+in both the server and the script, so nothing downstream sees the difference.
+`null` survives in exactly two places, `payment_required` and
+`annual_value_ils`, where "not stated" and "no" are different answers.
+Constraints such as "between 0 and 1" or "at least one" live in the
+descriptions, where the model still reads them, and in the pipeline's own
+validation, where they are enforced. An unsupported keyword is not ignored; the
+request fails before the model runs, so a schema edit that breaks this shows up
+on the first document rather than silently.
+
 ## Checking it
 
 ```bash

@@ -49,19 +49,12 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 | Agreements | A prompt and a pipeline that read contracting agreements, decide whether each describes a service, and either push it or link it to the service already here |
 | Docs | Hebrew developer page at `/developers`, machine contract at `/api/openapi.json` |
 
-Three suites cover it end to end — 97 checks, all passing against production:
+Four suites cover it end to end — 129 checks, all passing against production:
 
 ```bash
 node scripts/smoke.mjs https://social-services-il-zomerg.xhostd.app
 node scripts/smoke-mcp.mjs https://social-services-il-zomerg.xhostd.app
 ADMIN_TOKEN=... node scripts/smoke-ingest.mjs https://social-services-il-zomerg.xhostd.app
-```
-
-A fourth covers the agreements path — matching, linking, and the review queue.
-It needs the endpoints it exercises to be deployed first, so it has not yet run
-against production:
-
-```bash
 ADMIN_TOKEN=... node scripts/smoke-agreements.mjs https://social-services-il-zomerg.xhostd.app
 ```
 

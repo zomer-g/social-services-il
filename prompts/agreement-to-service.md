@@ -110,10 +110,11 @@ never put anything else in that field.
 
 ### Never invent
 
-This is the rule that outranks the others. A missing field is `null`; an
-invented one sends somebody across a city to a door that is not there.
+This is the rule that outranks the others. A missing field is left empty —
+`""` for text, `[]` for a list; an invented one sends somebody across a city to
+a door that is not there.
 
-- No address in the document → `address: null`. A town alone is a usable record;
+- No address in the document → `address: ""`. A town alone is a usable record;
   a fabricated street is not.
 - No public phone number → an empty array. The contract manager's direct line is
   not a public phone number.
@@ -164,8 +165,11 @@ commentary after it. It must validate against:
 
 {{SCHEMA}}
 
-Every key is present. A value the document does not carry is `null` (or `[]`),
-never omitted and never filled in from what you know about the world.
+Every key is present. Text the document does not carry is `""` and a list it
+does not carry is `[]` — never omitted, and never filled in from what you know
+about the world. `null` appears in exactly two places, `payment_required` and
+`annual_value_ils`, because for those "the document does not say" and "no" are
+different answers.
 
 ---
 
