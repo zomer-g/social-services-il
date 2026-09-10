@@ -671,8 +671,15 @@ ingestRouter.post('/links', requireScope('ingest:write'), (req: Request, res: Re
                                     method, evidence, status, note, decided_by, decided_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (source_id, external_id, service_id) DO UPDATE SET
-           kind = EXCLUDED.kind, title = EXCLUDED.title, confidence = EXCLUDED.confidence,
-           method = EXCLUDED.method, evidence = EXCLUDED.evidence, note = EXCLUDED.note,
+           -- A field left out of a re-send is unknown, not empty. Overwriting
+           -- with the absence erased the evidence and confidence a link was
+           -- decided on the moment a caller re-sent it without them.
+           kind = EXCLUDED.kind, method = EXCLUDED.method,
+           title = COALESCE(EXCLUDED.title, service_links.title),
+           confidence = COALESCE(EXCLUDED.confidence, service_links.confidence),
+           evidence = CASE WHEN EXCLUDED.evidence = '{}'::jsonb THEN service_links.evidence
+                           ELSE EXCLUDED.evidence END,
+           note = COALESCE(EXCLUDED.note, service_links.note),
            -- A link a person has already ruled on is not re-decided by the next
            -- nightly run: re-sending it refreshes the evidence, nothing else.
            status = CASE WHEN service_links.decided_by IS NULL THEN EXCLUDED.status ELSE service_links.status END

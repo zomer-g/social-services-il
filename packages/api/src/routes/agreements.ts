@@ -217,7 +217,11 @@ agreementsRouter.post('/apply', (req: Request, res: Response) => {
                                     method, evidence, status, decided_by, decided_at)
          VALUES ($1, $2, $3, $4, $5, $6, 'manual', $7, 'confirmed', $8, now())
          ON CONFLICT (source_id, external_id, service_id) DO UPDATE SET
-           title = EXCLUDED.title, confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence,
+           -- Absent is unknown, not empty: see the same statement in ingest.ts.
+           title = COALESCE(EXCLUDED.title, service_links.title),
+           confidence = COALESCE(EXCLUDED.confidence, service_links.confidence),
+           evidence = CASE WHEN EXCLUDED.evidence = '{}'::jsonb THEN service_links.evidence
+                           ELSE EXCLUDED.evidence END,
            method = 'manual', status = 'confirmed', decided_by = EXCLUDED.decided_by, decided_at = now()
          RETURNING id`,
         [

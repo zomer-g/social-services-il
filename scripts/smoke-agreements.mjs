@@ -247,6 +247,10 @@ async function main() {
     const listedAgain = await call(`/api/v1/ingest/links?external_id=${DOC_ID}`, { token: KEY });
     check('there is still one link', (listedAgain.body?.links ?? []).length === 1,
       `${(listedAgain.body?.links ?? []).length} links`);
+    // The re-send above carried no confidence and no evidence. Leaving a field
+    // out is not a request to erase it.
+    check('a re-send without confidence keeps the one already recorded',
+      listedAgain.body?.links?.[0]?.confidence === 0.91, JSON.stringify(listedAgain.body?.links?.[0]));
 
     const missing = await call('/api/v1/ingest/links', {
       method: 'POST',
