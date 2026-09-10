@@ -224,6 +224,126 @@ export const openapi = {
         },
       },
     },
+    '/api/v1/ingest/match': {
+      post: {
+        tags: ['Write'],
+        summary: 'Ask whether a service already exists here',
+        description: [
+          'Takes the service objects you were about to push — the same shape, so nothing has to',
+          'be rewritten — and answers, for each, whether the corpus already holds it. Writes',
+          'nothing.',
+          '',
+          'Sources overlap. A service a ministry funds, a municipality contracts for and a',
+          'nonprofit delivers is one service, and three sources describing it independently is',
+          'how a directory ends up listing the same shelter three times. Call this first.',
+          '',
+          'Three answers. `link` is confident enough to record without a person: it needs both a',
+          'high total and corroboration beyond the name — the same organization, or a shared',
+          'phone number. `review` means a person should look, and the `rationale` says what',
+          'stopped it being decided. `new` means nothing in the corpus resembles it.',
+          '',
+          'The score is broken into components — name, organization, taxonomy, geography,',
+          'contact — and a component the candidate says nothing about is `null` rather than',
+          'zero, so a thin record is treated as unverified rather than as a bad match.',
+          '',
+          'Matching is deterministic: the same candidate against the same corpus gives the same',
+          'answer, and a person reading a decision can reproduce it.',
+        ].join('\n'),
+        security: [{ apiKey: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['services'],
+                properties: {
+                  services: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 50,
+                    items: { $ref: '#/components/schemas/MatchCandidate' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'A decision, a rationale and the ranked candidates for each service.' },
+          400: { $ref: '#/components/responses/BadRequest' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+    '/api/v1/ingest/links': {
+      post: {
+        tags: ['Write'],
+        summary: 'Record that one of your documents is about an existing service',
+        description: [
+          'The other half of /match. When the answer was `link`, the document should not be',
+          'pushed as a service — it is a second sighting of one already here — but the sighting',
+          'is worth keeping: it is the provenance saying a municipality contracts for this, and',
+          'it is what makes the next run recognise the document instead of deciding again.',
+          '',
+          'A link from a trusted source is confirmed at once and appears among the service\'s',
+          'data sources. From anything else it waits for a reviewer, exactly as a pushed service',
+          'does. A link a person has already ruled on is never re-decided by a later push:',
+          're-sending refreshes the evidence and nothing else.',
+        ].join('\n'),
+        security: [{ apiKey: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['links'],
+                properties: {
+                  dry_run: { type: 'boolean', default: false },
+                  links: {
+                    type: 'array',
+                    minItems: 1,
+                    maxItems: 200,
+                    items: {
+                      type: 'object',
+                      required: ['service_id', 'external_id'],
+                      properties: {
+                        service_id: { type: 'string', description: 'From /match.' },
+                        external_id: { type: 'string', description: 'Your id for the document.' },
+                        kind: { type: 'string', default: 'agreement' },
+                        title: { type: 'string' },
+                        confidence: { type: 'number', minimum: 0, maximum: 1 },
+                        method: { type: 'string', enum: ['matcher', 'manual', 'declared'] },
+                        evidence: { type: 'object', description: 'Kept verbatim, so a link can be re-judged later.' },
+                        note: { type: 'string' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          202: { description: 'Recorded. Each item says whether it was confirmed or is waiting.' },
+          200: { description: 'Dry run.' },
+          400: { $ref: '#/components/responses/BadRequest' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+      get: {
+        tags: ['Write'],
+        summary: 'The links your source has recorded',
+        description: 'Filter with `status` (proposed / confirmed / rejected) or `external_id`.',
+        security: [{ apiKey: [] }],
+        parameters: [
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['proposed', 'confirmed', 'rejected'] } },
+          { name: 'external_id', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: { 200: { description: 'Your links, newest first.' } },
+      },
+    },
     '/api/v1/ingest/services/{externalId}': {
       delete: {
         tags: ['Write'],
@@ -360,6 +480,47 @@ export const openapi = {
       Facet: {
         type: 'object',
         properties: { id: { type: 'string' }, name: { type: ['string', 'null'] }, count: { type: 'integer' } },
+      },
+      MatchCandidate: {
+        type: 'object',
+        required: ['name'],
+        description: [
+          'A service you are considering pushing. Every field of ServiceInput is accepted and',
+          'anything else is ignored, so the payload you built for /ingest/services can be posted',
+          'here unchanged — only `name` is actually required.',
+        ].join(' '),
+        properties: {
+          external_id: { type: 'string', description: 'Echoed back, so results can be lined up with what you sent.' },
+          name: { type: 'string' },
+          alternate_names: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Other names the same offering goes by — the programme name, the provider\'s own name for it. ' +
+              'A service already in the corpus is usually listed under one of those rather than under a ' +
+              'contract\'s phrasing, and each is tried.',
+          },
+          organization: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'The registration number. When it matches, the organization is not in doubt.' },
+              name: { type: 'string' },
+            },
+          },
+          city: { type: 'string' },
+          lat: { type: 'number' },
+          lon: { type: 'number' },
+          branches: {
+            type: 'array',
+            description: 'Accepted so a full payload can be posted unchanged; the first branch with a place is used.',
+            items: { type: 'object', properties: { city: { type: 'string' }, lat: { type: 'number' }, lon: { type: 'number' } } },
+          },
+          phone_numbers: { type: 'array', items: { type: 'string' } },
+          urls: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object' }] } },
+          responses: { type: 'array', items: { type: 'string' }, description: 'Compared after expansion to ancestors.' },
+          national_service: { type: 'boolean' },
+          limit: { type: 'integer', minimum: 1, maximum: 25, default: 5 },
+        },
       },
       IngestRequest: {
         type: 'object',

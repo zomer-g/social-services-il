@@ -498,6 +498,89 @@ adminRouter.post(
 );
 
 /**
+ * Proposed links: "this agreement is about that service".
+ *
+ * A second queue, deliberately separate from moderation. What waits there is a
+ * record that will exist; what waits here is a claim about identity between two
+ * records that already do. Accepting the first publishes something, accepting
+ * the second merges two histories — and the evidence a reviewer needs is
+ * different in each case, which is why the row carries the component scores and
+ * the runner-up rather than a payload.
+ */
+adminRouter.get(
+  '/links',
+  handle(async (req, res) => {
+    const status = String(req.query['status'] ?? 'proposed');
+    const { rows } = await query(
+      `SELECT l.id, l.service_id, l.external_id, l.kind, l.title, l.confidence, l.method,
+              l.status, l.evidence, l.note, l.decided_by, l.decided_at, l.created_at,
+              s.name AS service_name, s.status AS service_status,
+              src.slug AS source, src.name AS source_name,
+              (SELECT c.card_id FROM cards c WHERE c.service_id = l.service_id
+                ORDER BY c.score DESC LIMIT 1) AS card_id,
+              (SELECT string_agg(DISTINCT o.name, ', ')
+                 FROM service_organizations so
+                 JOIN organizations o ON o.id = so.organization_id
+                WHERE so.service_id = l.service_id) AS organizations
+         FROM service_links l
+         JOIN services s ON s.id = l.service_id
+         LEFT JOIN sources src ON src.id = l.source_id
+        WHERE ($1 = 'all' OR l.status = $1)
+        ORDER BY l.created_at DESC
+        LIMIT 200`,
+      [status],
+    );
+    res.json({ links: rows });
+  }),
+);
+
+/**
+ * Confirm or reject one link.
+ *
+ * Rejecting is not a deletion: the claim was made, it was wrong, and the row
+ * saying so is what stops the next run of the same pipeline from proposing it
+ * again. A rejected link is also the signal that the document describes a
+ * service this corpus does not have yet, which is the other half of the job.
+ */
+adminRouter.post(
+  '/links/:id',
+  handle(async (req, res) => {
+    const decision = req.query['decision'] === 'reject' ? 'rejected' : 'confirmed';
+    const note = String(req.query['note'] ?? '') || null;
+    const actor = req.user?.email ?? 'admin-token';
+
+    const { rows } = await query<{ service_id: string; title: string | null; kind: string; external_id: string; source: string | null }>(
+      `UPDATE service_links l
+          SET status = $2, decided_by = $3, decided_at = now(), note = COALESCE($4, l.note)
+        FROM sources src
+        WHERE l.id = $1 AND src.id = l.source_id
+        RETURNING l.service_id, l.title, l.kind, l.external_id, src.slug AS source`,
+      [req.params['id'], decision, actor, note],
+    );
+
+    const link = rows[0];
+    if (!link) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    if (decision === 'confirmed') {
+      const entry = `${link.title ?? link.kind} (${link.source ?? 'link'}:${link.external_id})`;
+      await query(
+        `UPDATE services
+            SET data_sources = CASE WHEN $2 = ANY(data_sources) THEN data_sources
+                                    ELSE array_append(data_sources, $2) END,
+                updated_at = now()
+          WHERE id = $1`,
+        [link.service_id, entry],
+      );
+    }
+
+    res.json({ id: req.params['id'], decision, service_id: link.service_id });
+  }),
+);
+
+/**
  * Removes everything a source contributed.
  *
  * Needed when a feed turns out to be wrong at the root — a bad mapping that

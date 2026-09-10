@@ -8,3 +8,6 @@ dist/
 data/local/
 *.log
 packages/api/public/
+
+# Output of scripts/agreements.mjs: extractions of real documents, not source.
+agreements-out/

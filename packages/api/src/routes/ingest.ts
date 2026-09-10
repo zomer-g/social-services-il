@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { query, transaction } from '@ssil/db';
+import { matchService, query, transaction } from '@ssil/db';
 import { contentHash } from '@ssil/core';
 import { AUTO_PUBLISH_TRUST_THRESHOLD } from '@ssil/ingest';
 import { requireScope } from '../apikeys.js';
@@ -502,6 +502,265 @@ async function upsertService(input: ServiceInput, ctx: Ctx): Promise<ItemResult>
     ...(warnings.length ? { warnings } : {}),
   };
 }
+
+/**
+ * "Do you already have this?"
+ *
+ * The call a caller should make before the one above. Sources overlap: a service
+ * a ministry funds, a municipality contracts for and a nonprofit delivers is one
+ * service, and three sources describing it independently is how a directory
+ * fills up with the same shelter three times.
+ *
+ * It takes the service objects you were about to push — the same shape, so
+ * nothing has to be rewritten — and answers for each one whether it already
+ * exists, with the score broken into its parts. `link` means confident enough to
+ * record without a person; `review` means a person should look; `new` means push
+ * it. Nothing is written either way.
+ */
+const MatchCandidateSchema = z.object({
+  external_id: z.string().max(200).optional(),
+  name: z.string().min(2).max(400),
+  alternate_names: z
+    .array(z.string().max(400))
+    .max(5)
+    .optional()
+    .describe('Other names the same offering goes by — the programme name, the provider\'s own name for it.'),
+  phone_numbers: z.array(z.string().max(50)).max(10).optional(),
+  urls: z.array(z.union([UrlSchema, z.string()])).max(10).optional(),
+  responses: z.array(z.string()).max(30).optional(),
+  situations: z.array(z.string()).max(30).optional(),
+  national_service: z.boolean().optional(),
+  city: z.string().max(200).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lon: z.number().min(-180).max(180).optional(),
+  organization: z.object({ id: z.string().max(100).optional(), name: z.string().max(400).optional() }).optional(),
+  // Accepted so that a full service payload can be posted here unchanged; the
+  // first branch that carries a place is where the candidate is taken to be.
+  branches: z
+    .array(
+      z.object({
+        city: z.string().max(200).optional(),
+        lat: z.number().min(-90).max(90).optional(),
+        lon: z.number().min(-180).max(180).optional(),
+      }),
+    )
+    .max(5000)
+    .optional(),
+  limit: z.number().int().min(1).max(25).optional(),
+});
+
+const MatchPayloadSchema = z.object({ services: z.array(MatchCandidateSchema).min(1).max(50) });
+
+ingestRouter.post('/match', requireScope('ingest:write'), (req: Request, res: Response) => {
+  void (async () => {
+    const parsed = MatchPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'invalid_payload',
+        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      });
+      return;
+    }
+
+    const results = [];
+    for (const candidate of parsed.data.services) {
+      const place = candidate.branches?.find((b) => b.city || (b.lat != null && b.lon != null));
+      const match = await matchService({
+        name: candidate.name,
+        alternateNames: candidate.alternate_names,
+        organizationName: candidate.organization?.name,
+        organizationId: candidate.organization?.id,
+        city: candidate.city ?? place?.city,
+        lat: candidate.lat ?? place?.lat,
+        lon: candidate.lon ?? place?.lon,
+        phoneNumbers: candidate.phone_numbers,
+        urls: (candidate.urls ?? []).map((u) => (typeof u === 'string' ? u : u.href)),
+        responses: candidate.responses,
+        nationalService: candidate.national_service,
+        limit: candidate.limit,
+      });
+      results.push({ external_id: candidate.external_id ?? null, name: candidate.name, ...match });
+    }
+
+    res.json({
+      summary: results.reduce<Record<string, number>>((acc, r) => {
+        acc[r.decision] = (acc[r.decision] ?? 0) + 1;
+        return acc;
+      }, {}),
+      results,
+    });
+  })().catch((err: Error) => {
+    console.error('[error] match:', err.stack ?? err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
+  });
+});
+
+/**
+ * Records that a document from this source is about an existing service.
+ *
+ * The other half of the match. When the answer was `link`, the agreement should
+ * not be pushed as a service — it is a second sighting of one already here — but
+ * the sighting is worth keeping: it is the provenance that says a municipality
+ * contracts for this, and it is what makes the next run of the pipeline
+ * recognise the document instead of deciding again.
+ *
+ * A link from a trusted source is recorded as confirmed and appears on the
+ * service's card as a data source. From anything else it waits, exactly as a
+ * pushed service does.
+ */
+const LinkSchema = z.object({
+  service_id: z.string().min(1).max(300).describe('The service this document is about, as returned by /match.'),
+  external_id: z.string().min(1).max(200).describe('Your id for the document. Re-sending it updates the same link.'),
+  kind: z.string().max(40).optional().describe('What the document is. Defaults to "agreement".'),
+  title: z.string().max(400).optional().describe('Shown to a reviewer, and on the card once confirmed.'),
+  confidence: z.number().min(0).max(1).optional(),
+  method: z.enum(['matcher', 'manual', 'declared']).optional(),
+  evidence: z.record(z.string(), z.unknown()).optional().describe('Whatever the decision was made on. Kept verbatim.'),
+  note: z.string().max(2000).optional(),
+});
+
+const LinksPayloadSchema = z.object({
+  dry_run: z.boolean().optional(),
+  links: z.array(LinkSchema).min(1).max(200),
+});
+
+ingestRouter.post('/links', requireScope('ingest:write'), (req: Request, res: Response) => {
+  void (async () => {
+    const key = req.apiKey!;
+    if (!key.sourceId || !key.sourceSlug) {
+      res.status(403).json({ error: 'key_has_no_source', message: 'This key is not attached to a source.' });
+      return;
+    }
+
+    const parsed = LinksPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'invalid_payload',
+        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      });
+      return;
+    }
+
+    const { dry_run: dryRun = false, links } = parsed.data;
+    const confirmed = key.trustLevel >= AUTO_PUBLISH_TRUST_THRESHOLD;
+    const results: {
+      external_id: string;
+      service_id: string;
+      status: 'confirmed' | 'proposed' | 'rejected' | 'not_found';
+      link_id?: string;
+    }[] = [];
+
+    for (const link of links) {
+      const { rows: exists } = await query<{ id: string }>('SELECT id FROM services WHERE id = $1', [link.service_id]);
+      if (!exists.length) {
+        results.push({ external_id: link.external_id, service_id: link.service_id, status: 'not_found' });
+        continue;
+      }
+      if (dryRun) {
+        results.push({
+          external_id: link.external_id,
+          service_id: link.service_id,
+          status: confirmed ? 'confirmed' : 'proposed',
+        });
+        continue;
+      }
+
+      const status = confirmed ? 'confirmed' : 'proposed';
+      const { rows } = await query<{ id: string }>(
+        `INSERT INTO service_links (service_id, source_id, external_id, kind, title, confidence,
+                                    method, evidence, status, note, decided_by, decided_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         ON CONFLICT (source_id, external_id, service_id) DO UPDATE SET
+           kind = EXCLUDED.kind, title = EXCLUDED.title, confidence = EXCLUDED.confidence,
+           method = EXCLUDED.method, evidence = EXCLUDED.evidence, note = EXCLUDED.note,
+           -- A link a person has already ruled on is not re-decided by the next
+           -- nightly run: re-sending it refreshes the evidence, nothing else.
+           status = CASE WHEN service_links.decided_by IS NULL THEN EXCLUDED.status ELSE service_links.status END
+         RETURNING id`,
+        [
+          link.service_id,
+          key.sourceId,
+          link.external_id,
+          link.kind ?? 'agreement',
+          link.title ?? null,
+          link.confidence ?? null,
+          link.method ?? 'matcher',
+          JSON.stringify(link.evidence ?? {}),
+          status,
+          link.note ?? null,
+          confirmed ? `api_key:${key.name}` : null,
+          confirmed ? new Date().toISOString() : null,
+        ],
+      );
+
+      if (confirmed) await recordProvenance(link.service_id, link.title ?? link.kind ?? 'agreement', key.sourceSlug, link.external_id);
+
+      results.push({
+        external_id: link.external_id,
+        service_id: link.service_id,
+        status,
+        link_id: rows[0]?.id,
+      });
+    }
+
+    res.status(dryRun ? 200 : 202).json({
+      dry_run: dryRun,
+      confirmed_immediately: confirmed,
+      summary: results.reduce<Record<string, number>>((acc, r) => {
+        acc[r.status] = (acc[r.status] ?? 0) + 1;
+        return acc;
+      }, {}),
+      results,
+    });
+  })().catch((err: Error) => {
+    console.error('[error] links:', err.stack ?? err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
+  });
+});
+
+/**
+ * A confirmed link is provenance, and provenance belongs on the card.
+ *
+ * `data_sources` is what the public record shows for "where did this come from",
+ * so a service a municipality contracts for should say so there rather than only
+ * in a table an administrator can see.
+ */
+async function recordProvenance(serviceId: string, title: string, sourceSlug: string, externalId: string): Promise<void> {
+  const entry = `${title} (${sourceSlug}:${externalId})`;
+  await query(
+    `UPDATE services
+        SET data_sources = CASE WHEN $2 = ANY(data_sources) THEN data_sources
+                                ELSE array_append(data_sources, $2) END,
+            updated_at = now()
+      WHERE id = $1`,
+    [serviceId, entry],
+  );
+}
+
+/** The links this source has recorded, so a re-run can skip what it has done. */
+ingestRouter.get('/links', requireScope('ingest:write'), (req, res) => {
+  void (async () => {
+    const key = req.apiKey!;
+    const status = String(req.query['status'] ?? '');
+    const externalId = String(req.query['external_id'] ?? '');
+    const { rows } = await query(
+      `SELECT l.id, l.service_id, s.name AS service_name, l.external_id, l.kind, l.title,
+              l.confidence, l.method, l.status, l.note, l.decided_by, l.decided_at, l.created_at
+         FROM service_links l
+         JOIN services s ON s.id = l.service_id
+        WHERE l.source_id = $1
+          AND ($2 = '' OR l.status = $2)
+          AND ($3 = '' OR l.external_id = $3)
+        ORDER BY l.created_at DESC
+        LIMIT 500`,
+      [key.sourceId, status, externalId],
+    );
+    res.json({ links: rows });
+  })().catch((err: Error) => {
+    console.error('[error] list links:', err.message);
+    res.status(500).json({ error: 'internal_error' });
+  });
+});
 
 /** Withdraws a service. Archived rather than deleted, so the record survives. */
 ingestRouter.delete('/services/:externalId', requireScope('ingest:write'), (req, res) => {

@@ -45,6 +45,8 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 | MCP | Eight read-only tools, two resources, one guided prompt; no credentials |
 | Admin | Google sign-in by invitation, moderation, sources, API keys, diagnostics |
 | Importer | Converts the six-table export and pushes it through the public write API |
+| Deduplication | `POST /api/v1/ingest/match` answers "do you already have this", deterministically and with the score broken into its parts, before anything is written |
+| Agreements | A prompt and a pipeline that read contracting agreements, decide whether each describes a service, and either push it or link it to the service already here |
 | Docs | Hebrew developer page at `/developers`, machine contract at `/api/openapi.json` |
 
 Three suites cover it end to end — 97 checks, all passing against production:
@@ -54,6 +56,37 @@ node scripts/smoke.mjs https://social-services-il-zomerg.xhostd.app
 node scripts/smoke-mcp.mjs https://social-services-il-zomerg.xhostd.app
 ADMIN_TOKEN=... node scripts/smoke-ingest.mjs https://social-services-il-zomerg.xhostd.app
 ```
+
+A fourth covers the agreements path — matching, linking, and the review queue.
+It needs the endpoints it exercises to be deployed first, so it has not yet run
+against production:
+
+```bash
+ADMIN_TOKEN=... node scripts/smoke-agreements.mjs https://social-services-il-zomerg.xhostd.app
+```
+
+### Agreements as a source
+
+A repository of contracting agreements is a description of the country's social
+services written for auditors: mostly furniture, construction and legal counsel,
+with real services scattered through it — and most of those already here, having
+arrived earlier from somewhere else.
+
+```bash
+node scripts/agreements.mjs ./agreements --out ./agreements-out          # read
+INGEST_KEY=... node scripts/agreements.mjs ./agreements --match          # and ask the corpus
+INGEST_KEY=... node scripts/agreements.mjs ./agreements --push --commit  # and act on it
+```
+
+Reading is the model's job; deciding whether a service already exists is not.
+`POST /api/v1/ingest/match` answers that from the corpus itself — the same
+candidate always gets the same answer, with the score broken into name,
+organisation, taxonomy, geography and contact, so a decision can be reproduced
+and argued with. A confident match becomes a link rather than a second copy; an
+uncertain one waits for a person instead of being forced into yes or no.
+
+[`docs/agreements.md`](docs/agreements.md) has the pipeline, the weights and the
+reasoning.
 
 ### What the import left behind
 

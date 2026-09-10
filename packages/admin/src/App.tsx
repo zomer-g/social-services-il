@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Agreements } from './Agreements';
 import './admin.css';
 
 /**
@@ -14,12 +15,13 @@ import './admin.css';
  * it is typed in here rather than stored, so it never sits in browser storage.
  */
 
-const TABS = ['overview', 'review', 'reports', 'searches', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
+const TABS = ['overview', 'review', 'agreements', 'reports', 'searches', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'סקירה',
   review: 'ממתין לאישור',
+  agreements: 'הסכמים',
   reports: 'דיווחי טעויות',
   searches: 'חיפושים',
   sources: 'מקורות',
@@ -31,7 +33,7 @@ const TAB_LABELS: Record<Tab, string> = {
 
 let bootstrapToken = '';
 
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     ...init,
     credentials: 'include',
@@ -112,6 +114,7 @@ export function App() {
       <main>
         {tab === 'overview' && <Overview />}
         {tab === 'review' && <Review />}
+        {tab === 'agreements' && <Agreements />}
         {tab === 'reports' && <Reports />}
         {tab === 'searches' && <Searches />}
         {tab === 'sources' && <Sources />}
@@ -187,7 +190,7 @@ function SignIn({ auth, onSignedIn }: { auth: AuthStatus | null; onSignedIn: () 
   );
 }
 
-function useLoad<T>(path: string, deps: unknown[] = []) {
+export function useLoad<T>(path: string, deps: unknown[] = []) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
