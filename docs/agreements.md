@@ -37,10 +37,11 @@ document ──read──▶ extraction ──match──▶ decision ──push
 **Read.** [`prompts/agreement-to-service.md`](../prompts/agreement-to-service.md)
 goes to the model as a system prompt with the live taxonomy substituted into it,
 and the document as its own content block — a PDF stays a PDF. The answer is
-constrained to
+checked against
 [`prompts/agreement-extraction.schema.json`](../prompts/agreement-extraction.schema.json)
-by the API's structured-output mode, so it is JSON of the right shape or it is a
-failure, never prose to be salvaged.
+the moment it arrives. One that does not validate gets a single corrective turn
+with the list of what is wrong; a document that still fails is reported as a
+failure, never salvaged by guessing at what the prose meant.
 
 Two properties of that schema are worth naming. Its `services` entries are, once
 nulls are dropped, exactly the payload `POST /api/v1/ingest/services` takes — no
@@ -174,21 +175,30 @@ once, since a person pressing the button is the review a proposed link would
 wait for. A created service is a **draft** in the review queue, because it was
 read out of a PDF by a model and publication is a person's decision.
 
-## The schema is a subset of JSON Schema
+## Why the shape is checked afterwards, not enforced
 
-Structured outputs accept a subset: no `$comment`, no numeric or length bounds,
-no type arrays — and at most **16 union-typed parameters** in the whole schema,
-because each one multiplies the cost of compiling it. The extraction schema has
-two dozen optional text fields, so text cannot be nullable: a field the document
-does not carry is `""`, converted back to `null` the moment the answer is parsed,
-in both the server and the script, so nothing downstream sees the difference.
-`null` survives in exactly two places, `payment_required` and
-`annual_value_ils`, where "not stated" and "no" are different answers.
-Constraints such as "between 0 and 1" or "at least one" live in the
-descriptions, where the model still reads them, and in the pipeline's own
-validation, where they are enforced. An unsupported keyword is not ignored; the
-request fails before the model runs, so a schema edit that breaks this shows up
-on the first document rather than silently.
+The obvious tool for "reply in exactly this JSON shape" is structured outputs,
+and the pipeline started there. It does not survive this schema. Three limits
+were hit in turn, each one a request rejected before the model read anything:
+no `$comment` and no numeric or length bounds; at most 16 union-typed
+parameters; and finally a ceiling on the size of the compiled grammar itself,
+which a schema of nested services — each with an organization and a list of
+branches, every key required — exceeds however it is written.
+
+So the shape is held by the prompt, which carries the schema, and checked when
+the answer arrives, against the same file, by `schemaErrors` in `@ssil/core`.
+An answer that does not validate gets one more turn with the list of what is
+wrong; a document that fails twice is reported rather than retried again. Both
+turns are billed, and the cost the screen and the report show includes them —
+an `attempts` of 2 on a document is the visible trace of that.
+
+Two conventions from the structured-output attempt remain, because they are
+right on their own terms. Text the document does not carry is `""`, converted to
+`null` the moment the answer is parsed, and `null` survives only on
+`payment_required` and `annual_value_ils`, where "not stated" and "no" are
+different answers. Constraints such as "between 0 and 1" live in descriptions,
+where the model reads them, and in the pipeline's validation, where they are
+enforced.
 
 ## Checking it
 

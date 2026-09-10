@@ -34,6 +34,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { parseJsonObject, schemaErrors } from '@ssil/core';
 import { readdir, readFile, mkdir, writeFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,6 +87,11 @@ const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.csv', '.html', '.htm'
 const PDF_EXTENSION = '.pdf';
 /** The API's own ceiling is 32 MB for the whole request. */
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
+/**
+ * Turns an answer gets to validate. The second is for the occasional malformed
+ * reply; a document that fails twice goes in the report for a person.
+ */
+const MAX_ATTEMPTS = 2;
 
 const client = new Anthropic();
 
@@ -127,7 +133,7 @@ async function main() {
         const n = result.extraction?.services?.length ?? 0;
         console.log(`[read] ${basename(file)} → ${result.extraction?.verdict?.decision ?? 'failed'}, ${n} service(s)`);
       } catch (err) {
-        const failure = { file, error: err.message };
+        const failure = { file, error: err.message, ...(err.usage ? { usage: err.usage, attempts: err.attempts } : {}) };
         results.push(failure);
         await writeFile(outFile, JSON.stringify(failure, null, 2), 'utf8');
         console.error(`[fail] ${basename(file)}: ${err.message}`);
@@ -192,32 +198,78 @@ async function fetchTaxonomy(axis) {
 async function readDocument(file, prompt, schema) {
   const content = await contentFor(file);
 
-  const message = await client.messages
-    .stream({
-      model: MODEL,
-      max_tokens: 16000,
-      // The prompt carries the whole taxonomy and does not change between
-      // documents, so it is the cacheable prefix and the document is what
-      // varies after it.
-      system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
-      thinking: { type: 'adaptive' },
-      output_config: { effort: EFFORT, format: { type: 'json_schema', schema } },
-      messages: [{ role: 'user', content }],
-    })
-    .finalMessage();
+  // The shape is held by the prompt and checked here, not enforced by
+  // structured outputs, whose compiled grammar this schema exceeds (see
+  // docs/agreements.md). An answer that does not validate gets one corrective
+  // turn. Every turn is billed, and every turn is counted.
+  const conversation = [{ role: 'user', content }];
+  const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+  let served = MODEL;
+  let extraction = null;
+  let problems = [];
+  let attempts = 0;
 
-  if (message.stop_reason === 'refusal') {
-    throw new Error(`the model declined this document (${message.stop_details?.category ?? 'no category'})`);
+  while (attempts < MAX_ATTEMPTS && !extraction) {
+    attempts++;
+    const message = await client.messages
+      .stream({
+        model: MODEL,
+        max_tokens: 16000,
+        // The prompt carries the whole taxonomy and does not change between
+        // documents, so it is the cacheable prefix and the document is what
+        // varies after it.
+        system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
+        thinking: { type: 'adaptive' },
+        output_config: { effort: EFFORT },
+        messages: conversation,
+      })
+      .finalMessage();
+
+    served = message.model;
+    usage.input += message.usage.input_tokens;
+    usage.output += message.usage.output_tokens;
+    usage.cache_read += message.usage.cache_read_input_tokens ?? 0;
+    usage.cache_write += message.usage.cache_creation_input_tokens ?? 0;
+
+    if (message.stop_reason === 'refusal') {
+      throw Object.assign(
+        new Error(`the model declined this document (${message.stop_details?.category ?? 'no category'})`),
+        { usage, attempts },
+      );
+    }
+
+    const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+    const parsed = parseJsonObject(text);
+    problems = parsed.ok ? schemaErrors(schema, parsed.value) : [parsed.error];
+    if (message.stop_reason === 'max_tokens') problems.unshift('The reply was cut off at the output limit.');
+
+    if (parsed.ok && problems.length === 0) {
+      // "" is how the schema says "not in the document"; the rest of this
+      // script means that by null, so convert once.
+      extraction = blankToNull(parsed.value);
+      break;
+    }
+
+    // Append-only: the reply goes back as it came, then what was wrong with it.
+    conversation.push({ role: 'assistant', content: message.content });
+    conversation.push({
+      role: 'user',
+      content: [
+        'That reply does not match the schema:',
+        ...problems.slice(0, 20).map((p) => `- ${p}`),
+        '',
+        'Reply with the corrected JSON object only.',
+      ].join('\n'),
+    });
   }
 
-  const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-  let extraction;
-  try {
-    // "" is how the schema says "not in the document" (text cannot be nullable
-    // there); the rest of this script means that by null, so convert once.
-    extraction = blankToNull(message.parsed_output ?? JSON.parse(text));
-  } catch {
-    throw new Error(`the answer was not JSON: ${text.slice(0, 200)}`);
+  if (!extraction) {
+    // The spend travels with the failure, so the report's total is what was
+    // actually paid rather than what the successful documents cost.
+    throw Object.assign(
+      new Error(`no valid answer after ${attempts} attempt(s): ${problems.slice(0, 3).join('; ')}`),
+      { usage, attempts },
+    );
   }
 
   // The document's own id is what makes a second run update rather than
@@ -233,13 +285,9 @@ async function readDocument(file, prompt, schema) {
   return {
     file,
     read_at: new Date().toISOString(),
-    model: message.model,
-    usage: {
-      input: message.usage.input_tokens,
-      output: message.usage.output_tokens,
-      cache_read: message.usage.cache_read_input_tokens ?? 0,
-      cache_write: message.usage.cache_creation_input_tokens ?? 0,
-    },
+    model: served,
+    attempts,
+    usage,
     extraction,
     warnings: validate(extraction),
   };

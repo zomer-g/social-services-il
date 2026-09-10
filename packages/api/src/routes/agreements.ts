@@ -5,7 +5,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { matchService, query, transaction } from '@ssil/db';
-import { contentHash } from '@ssil/core';
+import { contentHash, parseJsonObject, schemaErrors, type JsonSchema } from '@ssil/core';
 import { config } from '../config.js';
 import { requireRole } from '../auth.js';
 
@@ -99,44 +99,96 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
     const { prompt, schema } = await promptAndSchema();
     const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
-    const message = await client.messages
-      .stream({
-        model: MODEL,
-        max_tokens: 16000,
-        // The prompt carries the whole taxonomy and is identical for every
-        // document, so it is the cached prefix. This is the difference between
-        // a batch costing what the documents cost and costing that plus the
-        // prompt ten thousand times over.
-        system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
-        thinking: { type: 'adaptive' },
-        output_config: { effort: 'high', format: { type: 'json_schema', schema } },
-        messages: [{ role: 'user', content: contentFor(filename, base64, text) }],
-      })
-      .finalMessage();
+    // Structured outputs would hold the shape at generation time, but this
+    // schema compiles to a grammar larger than the API accepts. The shape is
+    // held by the prompt instead, checked here against the same schema file,
+    // and an answer that does not validate gets one more turn — with the errors
+    // in hand — before the document is reported as failed. Every turn is billed
+    // and every turn is counted in the cost returned below.
+    const conversation: Anthropic.MessageParam[] = [
+      { role: 'user', content: contentFor(filename, base64, text) },
+    ];
+    const usage: TokenUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    let served = MODEL;
+    let found: Extraction | null = null;
+    let problems: string[] = [];
+    let answer = '';
+    let attempts = 0;
 
-    if (message.stop_reason === 'refusal') {
-      res.status(422).json({
-        error: 'declined',
-        message: `The model declined this document (${message.stop_details?.category ?? 'no category given'}).`,
+    while (attempts < MAX_ATTEMPTS && !found) {
+      attempts++;
+      const message = await client.messages
+        .stream({
+          model: MODEL,
+          max_tokens: 16000,
+          // The prompt carries the whole taxonomy and is identical for every
+          // document, so it is the cached prefix. This is the difference between
+          // a batch costing what the documents cost and costing that plus the
+          // prompt ten thousand times over.
+          system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
+          thinking: { type: 'adaptive' },
+          output_config: { effort: 'high' },
+          messages: conversation,
+        })
+        .finalMessage();
+
+      served = message.model;
+      usage.input_tokens += message.usage.input_tokens;
+      usage.output_tokens += message.usage.output_tokens;
+      usage.cache_read_input_tokens += message.usage.cache_read_input_tokens ?? 0;
+      usage.cache_creation_input_tokens += message.usage.cache_creation_input_tokens ?? 0;
+
+      if (message.stop_reason === 'refusal') {
+        res.status(422).json({
+          error: 'declined',
+          message: `The model declined this document (${message.stop_details?.category ?? 'no category given'}).`,
+          cost: costOf(served, usage),
+        });
+        return;
+      }
+
+      answer = message.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+
+      const parsed = parseJsonObject(answer);
+      problems = parsed.ok ? schemaErrors(schema as JsonSchema, parsed.value) : [parsed.error];
+      if (message.stop_reason === 'max_tokens') problems.unshift('The reply was cut off at the output limit.');
+
+      if (parsed.ok && problems.length === 0) {
+        // Text the document does not carry comes back as "" (see the schema)
+        // and everything downstream means "absent" by null, so it is converted
+        // once, here.
+        found = blankToNull(parsed.value) as Extraction;
+        break;
+      }
+
+      // Append-only: the reply goes back exactly as it came, followed by what
+      // was wrong with it.
+      conversation.push({ role: 'assistant', content: message.content });
+      conversation.push({
+        role: 'user',
+        content: [
+          'That reply does not match the schema:',
+          ...problems.slice(0, 20).map((p) => `- ${p}`),
+          '',
+          'Reply with the corrected JSON object only.',
+        ].join('\n'),
+      });
+    }
+
+    if (!found) {
+      res.status(502).json({
+        error: 'invalid_answer',
+        message: `No valid answer after ${attempts} attempt(s).`,
+        problems: problems.slice(0, 20),
+        answer: answer.slice(0, 500),
+        cost: costOf(served, usage),
       });
       return;
     }
-
-    const answer = message.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
-
-    let extraction: Extraction;
-    try {
-      // Text the document does not carry comes back as "" — the schema cannot
-      // make text nullable (see prompts/agreement-extraction.schema.json) — and
-      // everything downstream means "absent" by null, so it is converted once, here.
-      extraction = blankToNull(JSON.parse(answer)) as Extraction;
-    } catch {
-      res.status(502).json({ error: 'unparseable', message: answer.slice(0, 500) });
-      return;
-    }
+    const extraction: Extraction = found;
 
     extraction.document ??= {} as Extraction['document'];
     extraction.document.external_id ||= slug(filename);
@@ -151,15 +203,18 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
 
     res.json({
       filename,
-      model: message.model,
+      model: served,
       elapsed_ms: Date.now() - started,
+      // More than one means the first answer did not validate and was
+      // corrected; the cost below already includes every attempt.
+      attempts,
       usage: {
-        input: message.usage.input_tokens,
-        output: message.usage.output_tokens,
-        cache_read: message.usage.cache_read_input_tokens ?? 0,
-        cache_write: message.usage.cache_creation_input_tokens ?? 0,
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cache_read: usage.cache_read_input_tokens,
+        cache_write: usage.cache_creation_input_tokens,
       },
-      cost: costOf(message.model, message.usage),
+      cost: costOf(served, usage),
       extraction,
       warnings: validate(extraction),
       matches,
@@ -575,7 +630,22 @@ async function promptAndSchema(): Promise<{ prompt: string; schema: Record<strin
   return cached;
 }
 
-function costOf(model: string, usage: Anthropic.Usage) {
+/** One reply's token counts, or several replies' summed. */
+interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+/**
+ * How many turns an answer gets to validate. The second exists for the
+ * occasional malformed reply; a document that fails twice is a document a
+ * person should look at, not one to keep paying for.
+ */
+const MAX_ATTEMPTS = 2;
+
+function costOf(model: string, usage: TokenUsage) {
   const price = PRICES[model] ?? PRICES[MODEL]!;
   const perToken = price.input / 1_000_000;
   const input = usage.input_tokens * perToken;

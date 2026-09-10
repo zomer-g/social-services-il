@@ -1,5 +1,5 @@
 {
-  "description": "The shape one agreement produces. Every key is required. Text the document does not carry is an empty string, and a list it does not carry is empty; only payment_required and annual_value_ils use null, because for those two 'not stated' and 'no' are different answers. Structured outputs allow at most 16 union-typed parameters, which is why text is not nullable here. Empty values are dropped before anything is pushed, and the objects under services are then exactly the payload POST /api/v1/ingest/match and POST /api/v1/ingest/services take.",
+  "description": "The shape one agreement produces. Every key is required. Text the document does not carry is an empty string, and a list it does not carry is empty; only payment_required and annual_value_ils use null, because for those two 'not stated' and 'no' are different answers. The answer is checked against this file when it arrives (schemaErrors in @ssil/core); it is not enforced at generation, because the compiled grammar would exceed what the API accepts. Empty values are dropped before anything is pushed, and the objects under services are then exactly the payload POST /api/v1/ingest/match and POST /api/v1/ingest/services take.",
   "type": "object",
   "additionalProperties": false,
   "required": [
