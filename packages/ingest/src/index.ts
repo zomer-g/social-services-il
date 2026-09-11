@@ -37,3 +37,12 @@ export const AUTO_PUBLISH_TRUST_THRESHOLD = 70;
 
 export { loadTaxonomy, taxonomyIsEmpty, flattenTaxonomy } from './taxonomy.js';
 export { loadFixtures, clearFixtures, fixtureCardIds } from './fixtures.js';
+
+export * from './reader/models.js';
+export * from './reader/types.js';
+export { readAgreement, apiKeysFromEnv, blankToNull, type ReadOptions, type ReadResult, type ReadFailure } from './reader/read.js';
+export { buildReaderPrompt, type TaxonomyLine } from './reader/prompt.js';
+export { verifyProviders, type ProviderCheck } from './reader/verify.js';
+export { openaiRequestBody, parseOpenAIResponse } from './reader/openai.js';
+export { geminiRequestBody, parseGeminiChunks } from './reader/google.js';
+export { parseBlock as parseEventBlock } from './reader/http.js';

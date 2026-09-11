@@ -46,7 +46,7 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 | Admin | Google sign-in by invitation, moderation, sources, API keys, diagnostics |
 | Importer | Converts the six-table export and pushes it through the public write API |
 | Deduplication | `POST /api/v1/ingest/match` answers "do you already have this", deterministically and with the score broken into its parts, before anything is written |
-| Agreements | A prompt and a pipeline that read contracting agreements, decide whether each describes a service, and either push it or link it to the service already here |
+| Agreements | A prompt and a pipeline that read contracting agreements, decide whether each describes a service, and either push it or link it to the service already here — with models from Anthropic, OpenAI or Google, and a screen that reads one document with several at once and compares them |
 | Docs | Hebrew developer page at `/developers`, machine contract at `/api/openapi.json` |
 
 Four suites cover it end to end — 129 checks, all passing against production:
@@ -98,13 +98,21 @@ that does not exist in the export's own taxonomy tables, one of them visibly
 corrupt (`human_services:hehuman_services:health:...`); they are reported rather
 than guessed at.
 
-## Two things only you can do
+## Things only you can do
 
 **Smart search** needs a model key. Everything else works without one, and the
 button hides itself until it is set:
 
 ```bash
 set_env ANTHROPIC_API_KEY=sk-ant-...   # secret
+```
+
+**Reading agreements** can use any of three providers; each is available on the
+screen once its key is set:
+
+```bash
+set_env OPENAI_API_KEY=sk-...          # secret
+set_env GEMINI_API_KEY=...             # secret
 ```
 
 **Google sign-in is already working** and needed no credentials: the hosting

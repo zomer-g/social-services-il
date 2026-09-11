@@ -1,51 +1,67 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Anthropic from '@anthropic-ai/sdk';
-import { Router, type Request, type Response } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { matchService, query, transaction } from '@ssil/db';
-import { contentHash, parseJsonObject, schemaErrors, type JsonSchema } from '@ssil/core';
-import { config } from '../config.js';
+import { contentHash, type JsonSchema } from '@ssil/core';
+import {
+  apiKeysFromEnv,
+  buildReaderPrompt,
+  DEFAULT_MODEL,
+  effortFor,
+  MODELS,
+  modelSpec,
+  PRICES_CHECKED,
+  PROVIDER_KEYS,
+  PROVIDER_LABELS,
+  readAgreement,
+  verifyProviders,
+  type Effort,
+  type Provider,
+  type ProviderCheck,
+  type ReadResult,
+  type ReaderDocument,
+} from '@ssil/ingest';
 import { requireRole } from '../auth.js';
 
 /**
- * Reading an agreement, one document at a time, with the bill attached.
+ * Reading agreements, with any model, and with several at once.
  *
  * The pipeline in scripts/agreements.mjs is what an archive of ten thousand
- * documents goes through. This is the same three steps — read, match, act —
- * behind a screen, so that the questions you have before running it on ten
- * thousand can be answered on one: does it understand this kind of document,
- * does it recognise the services we already have, and what will it cost.
+ * documents goes through. This is the same reading behind a screen, so the
+ * questions worth answering before that run can be answered on a handful of
+ * real documents: which model understands this kind of document, which one
+ * recognises the services we already have, and what each of them costs.
  *
- * The cost is the point of this endpoint existing rather than a script alone.
- * A per-document figure measured on real documents is the only honest basis for
- * "and what about the whole archive", and it is the number that decides whether
- * this is a good idea. So every response carries its tokens and its price, split
- * into the parts that behave differently at scale — the cached prompt, which is
- * paid once per run, and the document, which is paid every time.
+ * A batch is one document sent to every chosen model in parallel. The runs are
+ * kept, so answers can be put side by side, and so the totals — cost per
+ * document, time, failures, how often a model agreed with the rest — are
+ * measured on everything tried rather than remembered.
+ *
+ * Nothing read here reaches the public site. Acting on a reading (below) makes
+ * a draft or a link, one click at a time.
  */
 export const agreementsRouter: Router = Router();
 
 agreementsRouter.use(requireRole('editor'));
 
-const MODEL = 'claude-opus-5';
+/**
+ * The largest document accepted. Google and OpenAI take PDFs up to 50 MB; an
+ * archive is not a document, and a larger file should be split first.
+ */
+const MAX_BYTES = 50 * 1024 * 1024;
+
+/** How many models one document may be sent to at once. */
+const MAX_MODELS_PER_BATCH = 6;
 
 /**
- * USD per million tokens, per model. Cache writes cost a quarter more than
- * ordinary input and cache reads a tenth of it, which is what makes a large
- * fixed prompt affordable across a batch.
+ * Reads running at once against one provider, across every batch. Enough that
+ * a comparison does not wait on itself, few enough that three documents
+ * dropped on the screen together do not trip a rate limit.
  */
-const PRICES: Record<string, { input: number; output: number }> = {
-  'claude-opus-5': { input: 5, output: 25 },
-  'claude-sonnet-5': { input: 2, output: 10 },
-  'claude-haiku-4-5': { input: 1, output: 5 },
-};
-const CACHE_WRITE_MULTIPLIER = 1.25;
-const CACHE_READ_MULTIPLIER = 0.1;
-
-/** A document larger than this is not a document, it is an archive. */
-const MAX_BYTES = 20 * 1024 * 1024;
+const SLOTS_PER_PROVIDER = 4;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PROMPT_FILE = join(HERE, '..', '..', '..', '..', 'prompts', 'agreement-to-service.md');
@@ -54,30 +70,322 @@ const SCHEMA_FILE = join(HERE, '..', '..', '..', '..', 'prompts', 'agreement-ext
 /** The slug everything read here is attributed to. Created on first use. */
 const SOURCE_SLUG = 'agreements';
 
+const BOOTED_AT = new Date();
+
+/* ------------------------------------------------------------------ models */
+
+let verified: { at: number; checks: Record<Provider, ProviderCheck> } | null = null;
+const VERIFY_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The catalog, and for each model whether it can be used right now: the
+ * provider's key is set, and the provider lists the model for that key. The
+ * second half is asked of the providers and remembered for ten minutes;
+ * `?refresh=1` asks again, which is what to do after setting a key.
+ */
+agreementsRouter.get('/models', (req, res) => {
+  void (async () => {
+    const keys = apiKeysFromEnv();
+    if (!verified || Date.now() - verified.at > VERIFY_TTL_MS || req.query['refresh'] === '1') {
+      verified = { at: Date.now(), checks: await verifyProviders(keys) };
+    }
+    const checks = verified.checks;
+
+    res.json({
+      prices_checked: PRICES_CHECKED,
+      default_model: DEFAULT_MODEL,
+      max_bytes: MAX_BYTES,
+      max_models_per_batch: MAX_MODELS_PER_BATCH,
+      checked_at: new Date(verified.at).toISOString(),
+      providers: (Object.keys(PROVIDER_LABELS) as Provider[]).map((provider) => ({
+        id: provider,
+        label: PROVIDER_LABELS[provider],
+        key_names: PROVIDER_KEYS[provider],
+        ...checks[provider],
+      })),
+      models: MODELS.map((m) => {
+        const check = checks[m.provider];
+        const listed = check.listed[m.id];
+        return {
+          ...m,
+          // Usable when the key is set and the provider did not say otherwise.
+          // A provider that could not be asked is not held against the model:
+          // the read itself will say what is wrong, more precisely than a guess.
+          available: check.configured && listed !== false,
+          listed: listed ?? null,
+        };
+      }),
+    });
+  })().catch((err: Error) => {
+    console.error('[error] agreements models:', err.stack ?? err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error', message: err.message });
+  });
+});
+
+/** Kept for the checks and for anything that asked before there were models. */
+agreementsRouter.get('/status', (_req, res) => {
+  const keys = apiKeysFromEnv();
+  res.json({
+    available: Object.keys(keys).length > 0,
+    providers: Object.fromEntries((Object.keys(PROVIDER_LABELS) as Provider[]).map((p) => [p, !!keys[p]])),
+    model: DEFAULT_MODEL,
+    max_bytes: MAX_BYTES,
+  });
+});
+
+/* ----------------------------------------------------------------- batches */
+
+const EFFORTS = ['low', 'medium', 'high'] as const;
+
+/**
+ * Sends one document to several models at once.
+ *
+ * The document is the raw request body — a PDF as application/pdf, anything
+ * else as text — rather than base64 inside JSON, which inflated a 30 MB scan to
+ * 40 MB and was refused before it reached a model. What to read it with is in
+ * the query string.
+ *
+ * Answers 202 at once with the run ids; the reads carry on in the background
+ * and each is written to its row as it finishes. The screen polls the batch.
+ */
+agreementsRouter.post(
+  '/batches',
+  express.raw({ type: () => true, limit: MAX_BYTES }),
+  (req: Request, res: Response) => {
+    void (async () => {
+      const filename = String(req.query['filename'] ?? '').trim().slice(0, 300);
+      const requested = String(req.query['models'] ?? '')
+        .split(',')
+        .map((m) => m.trim())
+        .filter(Boolean);
+      const models = [...new Set(requested)];
+      const effort = (EFFORTS as readonly string[]).includes(String(req.query['effort']))
+        ? (req.query['effort'] as Effort)
+        : 'high';
+      const match = req.query['match'] !== 'false';
+
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      const problems: string[] = [];
+      if (!filename) problems.push('filename is required.');
+      if (body.length === 0) problems.push('The request body is the document, and it was empty.');
+      if (models.length === 0) problems.push('Choose at least one model (models=a,b).');
+      if (models.length > MAX_MODELS_PER_BATCH) problems.push(`At most ${MAX_MODELS_PER_BATCH} models at once.`);
+      const unknown = models.filter((m) => !modelSpec(m));
+      if (unknown.length) problems.push(`Not in the catalog: ${unknown.join(', ')}.`);
+      if (problems.length) {
+        res.status(400).json({ error: 'invalid_request', message: problems.join(' '), problems });
+        return;
+      }
+
+      // A PDF is recognised by its first bytes, not by what the browser guessed.
+      const isPdf = body.subarray(0, 5).toString('latin1') === '%PDF-';
+      const document: ReaderDocument = isPdf
+        ? { filename, pdf: body }
+        : { filename, text: body.toString('utf8') };
+      const hash = createHash('sha256').update(body).digest('hex');
+      const batchId = randomUUID();
+      const actor = req.user?.email ?? 'admin-token';
+
+      const runs: { id: string; model: string; provider: Provider }[] = [];
+      for (const model of models) {
+        const spec = modelSpec(model)!;
+        const { rows } = await query<{ id: string }>(
+          `INSERT INTO agreement_runs (batch_id, filename, document_hash, document_bytes, document_kind,
+                                       provider, model, effort, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+          [batchId, filename, hash, body.length, isPdf ? 'pdf' : 'text', spec.provider, model, effortFor(spec, effort), actor],
+        );
+        runs.push({ id: rows[0]!.id, model, provider: spec.provider });
+      }
+
+      res.status(202).json({
+        batch_id: batchId,
+        filename,
+        bytes: body.length,
+        kind: isPdf ? 'pdf' : 'text',
+        runs: runs.map((r) => ({ id: r.id, model: r.model, status: 'queued' })),
+      });
+
+      void runBatch(runs, document, effort, match);
+    })().catch((err: Error) => {
+      console.error('[error] agreements batch:', err.stack ?? err.message);
+      if (!res.headersSent) res.status(500).json({ error: 'internal_error', message: err.message });
+    });
+  },
+);
+
+agreementsRouter.get('/batches', (req, res) => {
+  void (async () => {
+    await settleInterrupted();
+    const limit = Math.min(Math.max(Number(req.query['limit']) || 30, 1), 200);
+    const { rows } = await query(
+      `SELECT batch_id, filename,
+              max(document_bytes) AS bytes, max(document_kind) AS kind,
+              min(created_at) AS created_at, max(finished_at) AS finished_at,
+              count(*) FILTER (WHERE status IN ('queued', 'running'))::int AS pending,
+              json_agg(json_build_object(
+                'id', id, 'model', model, 'provider', provider, 'status', status,
+                'decision', extraction->'verdict'->>'decision',
+                'services', jsonb_array_length(COALESCE(extraction->'services', '[]'::jsonb)),
+                'cost', cost->'total', 'marginal', cost->'marginal', 'elapsed_ms', elapsed_ms,
+                'error', error->>'message'
+              ) ORDER BY model) AS runs
+         FROM agreement_runs
+        GROUP BY batch_id, filename
+        ORDER BY min(created_at) DESC
+        LIMIT $1`,
+      [limit],
+    );
+    res.json({ batches: rows });
+  })().catch((err: Error) => {
+    console.error('[error] agreements batches:', err.stack ?? err.message);
+    res.status(500).json({ error: 'internal_error', message: err.message });
+  });
+});
+
+agreementsRouter.get('/batches/:id', (req, res) => {
+  void (async () => {
+    await settleInterrupted();
+    const { rows } = await query(
+      `SELECT id, batch_id, filename, document_hash, document_bytes, document_kind, provider, model,
+              served_model, effort, status, attempts, usage, cost, elapsed_ms, extraction, warnings,
+              matches, error, created_by, created_at, started_at, finished_at
+         FROM agreement_runs
+        WHERE batch_id = $1
+        ORDER BY model`,
+      [req.params['id']],
+    );
+    if (!rows.length) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.json({ batch_id: req.params['id'], filename: rows[0]!['filename'], runs: rows });
+  })().catch((err: Error) => {
+    // A malformed uuid is a request that names nothing, not a server fault.
+    if (/invalid input syntax for type uuid/.test(err.message)) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    console.error('[error] agreements batch:', err.stack ?? err.message);
+    res.status(500).json({ error: 'internal_error', message: err.message });
+  });
+});
+
+/** Removes a batch from the history. Nothing written from it is touched. */
+agreementsRouter.delete('/batches/:id', (req, res) => {
+  void (async () => {
+    const { rowCount } = await query(
+      `DELETE FROM agreement_runs WHERE batch_id = $1 AND status NOT IN ('queued', 'running')`,
+      [req.params['id']],
+    );
+    res.status(rowCount ? 200 : 404).json({ deleted: rowCount ?? 0 });
+  })().catch((err: Error) => {
+    if (/invalid input syntax for type uuid/.test(err.message)) {
+      res.status(404).json({ error: 'not_found' });
+      return;
+    }
+    res.status(500).json({ error: 'internal_error', message: err.message });
+  });
+});
+
+/**
+ * Per model, across every document tried: what it costs, how long it takes,
+ * how often it fails, and how often its verdict agreed with the other models
+ * that read the same document.
+ *
+ * Agreement is not accuracy — three models can agree and all be wrong — but it
+ * is the one quality signal that needs no answer key, and a model that is
+ * regularly the odd one out is a model whose disagreements are worth reading.
+ */
+agreementsRouter.get('/stats', (_req, res) => {
+  void (async () => {
+    await settleInterrupted();
+    const { rows: totals } = await query<{
+      model: string;
+      provider: string;
+      runs: number;
+      done: number;
+      failed: number;
+      avg_marginal: number | null;
+      avg_total: number | null;
+      spent: number | null;
+      avg_ms: number | null;
+      avg_attempts: number | null;
+      avg_bytes: number | null;
+    }>(
+      `SELECT model, provider,
+              count(*)::int AS runs,
+              count(*) FILTER (WHERE status = 'done')::int AS done,
+              count(*) FILTER (WHERE status = 'failed')::int AS failed,
+              avg((cost->>'marginal')::float8) FILTER (WHERE status = 'done') AS avg_marginal,
+              avg((cost->>'total')::float8) FILTER (WHERE status = 'done') AS avg_total,
+              sum((cost->>'total')::float8) AS spent,
+              avg(elapsed_ms) FILTER (WHERE status = 'done')::float8 AS avg_ms,
+              avg(attempts) FILTER (WHERE status = 'done')::float8 AS avg_attempts,
+              avg(document_bytes)::float8 AS avg_bytes
+         FROM agreement_runs
+        WHERE status IN ('done', 'failed')
+        GROUP BY model, provider
+        ORDER BY model`,
+    );
+
+    const { rows: verdicts } = await query<{ batch_id: string; model: string; decision: string | null; services: number }>(
+      `SELECT batch_id, model, extraction->'verdict'->>'decision' AS decision,
+              jsonb_array_length(COALESCE(extraction->'services', '[]'::jsonb))::int AS services
+         FROM agreement_runs
+        WHERE status = 'done'`,
+    );
+
+    const byBatch = new Map<string, { model: string; decision: string | null; services: number }[]>();
+    for (const v of verdicts) byBatch.set(v.batch_id, [...(byBatch.get(v.batch_id) ?? []), v]);
+
+    const agreement = new Map<string, { compared: number; agreed: number }>();
+    for (const runs of byBatch.values()) {
+      if (runs.length < 2) continue;
+      for (const run of runs) {
+        // Measured against the others, not against a majority that includes
+        // itself: with two models a self-inclusive majority always agrees.
+        const others = runs.filter((r) => r !== run).map((r) => r.decision);
+        const tally = new Map<string | null, number>();
+        for (const d of others) tally.set(d, (tally.get(d) ?? 0) + 1);
+        const top = Math.max(...tally.values());
+        const entry = agreement.get(run.model) ?? { compared: 0, agreed: 0 };
+        entry.compared++;
+        if ((tally.get(run.decision) ?? 0) === top) entry.agreed++;
+        agreement.set(run.model, entry);
+      }
+    }
+
+    res.json({
+      models: totals.map((t) => ({
+        ...t,
+        agreement: agreement.get(t.model) ?? { compared: 0, agreed: 0 },
+      })),
+    });
+  })().catch((err: Error) => {
+    console.error('[error] agreements stats:', err.stack ?? err.message);
+    res.status(500).json({ error: 'internal_error', message: err.message });
+  });
+});
+
+/**
+ * Reads one document, synchronously, with one model.
+ *
+ * The first shape this endpoint had, before batches, kept for callers that want
+ * one answer in one response. The screen uses batches.
+ */
 const AnalyzeSchema = z.object({
   filename: z.string().min(1).max(300),
   /** Base64 for a PDF; plain text for anything else. Exactly one. */
   data_base64: z.string().optional(),
   text: z.string().max(400_000).optional(),
+  model: z.string().optional(),
+  effort: z.enum(EFFORTS).optional(),
   match: z.boolean().optional().describe('Ask the corpus whether each extracted service already exists. Default true.'),
-});
-
-agreementsRouter.get('/status', (_req, res) => {
-  res.json({
-    available: config.anthropicApiKey.length > 0,
-    model: MODEL,
-    prices_usd_per_mtok: PRICES[MODEL],
-    max_bytes: MAX_BYTES,
-  });
 });
 
 agreementsRouter.post('/analyze', (req: Request, res: Response) => {
   void (async () => {
-    if (!config.anthropicApiKey) {
-      res.status(503).json({ error: 'not_configured', message: 'ANTHROPIC_API_KEY is not set on this server.' });
-      return;
-    }
-
     const parsed = AnalyzeSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: 'invalid_payload', issues: parsed.error.issues.map((i) => i.message) });
@@ -88,6 +396,11 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
       res.status(400).json({ error: 'invalid_payload', message: 'Send either data_base64 (a PDF) or text.' });
       return;
     }
+    const model = parsed.data.model ?? DEFAULT_MODEL;
+    if (!modelSpec(model)) {
+      res.status(400).json({ error: 'invalid_payload', message: `Not in the catalog: ${model}.` });
+      return;
+    }
 
     const bytes = base64 ? Buffer.byteLength(base64, 'base64') : Buffer.byteLength(text ?? '', 'utf8');
     if (bytes > MAX_BYTES) {
@@ -95,126 +408,36 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
       return;
     }
 
-    const started = Date.now();
-    const { prompt, schema } = await promptAndSchema();
-    const client = new Anthropic({ apiKey: config.anthropicApiKey });
-
-    // Structured outputs would hold the shape at generation time, but this
-    // schema compiles to a grammar larger than the API accepts. The shape is
-    // held by the prompt instead, checked here against the same schema file,
-    // and an answer that does not validate gets one more turn — with the errors
-    // in hand — before the document is reported as failed. Every turn is billed
-    // and every turn is counted in the cost returned below.
-    const conversation: Anthropic.MessageParam[] = [
-      { role: 'user', content: contentFor(filename, base64, text) },
-    ];
-    const usage: TokenUsage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-    let served = MODEL;
-    let found: Extraction | null = null;
-    let problems: string[] = [];
-    let answer = '';
-    let attempts = 0;
-
-    while (attempts < MAX_ATTEMPTS && !found) {
-      attempts++;
-      const message = await client.messages
-        .stream({
-          model: MODEL,
-          max_tokens: 16000,
-          // The prompt carries the whole taxonomy and is identical for every
-          // document, so it is the cached prefix. This is the difference between
-          // a batch costing what the documents cost and costing that plus the
-          // prompt ten thousand times over.
-          system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
-          thinking: { type: 'adaptive' },
-          output_config: { effort: 'high' },
-          messages: conversation,
-        })
-        .finalMessage();
-
-      served = message.model;
-      usage.input_tokens += message.usage.input_tokens;
-      usage.output_tokens += message.usage.output_tokens;
-      usage.cache_read_input_tokens += message.usage.cache_read_input_tokens ?? 0;
-      usage.cache_creation_input_tokens += message.usage.cache_creation_input_tokens ?? 0;
-
-      if (message.stop_reason === 'refusal') {
-        res.status(422).json({
-          error: 'declined',
-          message: `The model declined this document (${message.stop_details?.category ?? 'no category given'}).`,
-          cost: costOf(served, usage),
-        });
-        return;
-      }
-
-      answer = message.content
-        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-        .map((b) => b.text)
-        .join('');
-
-      const parsed = parseJsonObject(answer);
-      problems = parsed.ok ? schemaErrors(schema as JsonSchema, parsed.value) : [parsed.error];
-      if (message.stop_reason === 'max_tokens') problems.unshift('The reply was cut off at the output limit.');
-
-      if (parsed.ok && problems.length === 0) {
-        // Text the document does not carry comes back as "" (see the schema)
-        // and everything downstream means "absent" by null, so it is converted
-        // once, here.
-        found = blankToNull(parsed.value) as Extraction;
-        break;
-      }
-
-      // Append-only: the reply goes back exactly as it came, followed by what
-      // was wrong with it.
-      conversation.push({ role: 'assistant', content: message.content });
-      conversation.push({
-        role: 'user',
-        content: [
-          'That reply does not match the schema:',
-          ...problems.slice(0, 20).map((p) => `- ${p}`),
-          '',
-          'Reply with the corrected JSON object only.',
-        ].join('\n'),
-      });
-    }
-
-    if (!found) {
-      res.status(502).json({
-        error: 'invalid_answer',
-        message: `No valid answer after ${attempts} attempt(s).`,
-        problems: problems.slice(0, 20),
-        answer: answer.slice(0, 500),
-        cost: costOf(served, usage),
+    const document: ReaderDocument = base64 ? { filename, pdf: Buffer.from(base64, 'base64') } : { filename, text };
+    const result = await read(model, document, parsed.data.effort ?? 'high');
+    if (!result.ok) {
+      const status = result.error?.kind === 'not_configured' ? 503 : result.error?.kind === 'refused' ? 422 : 502;
+      res.status(status).json({
+        error: result.error?.kind,
+        message: result.error?.message,
+        problems: result.error?.problems,
+        answer: result.error?.answer?.slice(0, 500),
+        cost: result.cost,
       });
       return;
     }
-    const extraction: Extraction = found;
 
-    extraction.document ??= {} as Extraction['document'];
-    extraction.document.external_id ||= slug(filename);
-    (extraction.services ?? []).forEach((service, i) => {
-      service.external_id ||= `${extraction.document.external_id}-${i + 1}`;
-    });
-
-    const matches =
-      parsed.data.match === false
-        ? []
-        : await Promise.all((extraction.services ?? []).map((service) => matchOne(service)));
-
+    const extraction = finish(result.extraction!, filename);
+    const matches = parsed.data.match === false ? [] : await matchAll(extraction);
     res.json({
       filename,
-      model: served,
-      elapsed_ms: Date.now() - started,
-      // More than one means the first answer did not validate and was
-      // corrected; the cost below already includes every attempt.
-      attempts,
+      model: result.servedModel ?? model,
+      effort: result.effort,
+      elapsed_ms: result.elapsedMs,
+      attempts: result.attempts,
       usage: {
-        input: usage.input_tokens,
-        output: usage.output_tokens,
-        cache_read: usage.cache_read_input_tokens,
-        cache_write: usage.cache_creation_input_tokens,
+        input: result.usage.input,
+        output: result.usage.output,
+        cache_read: result.usage.cacheRead,
+        cache_write: result.usage.cacheWrite,
+        reasoning: result.usage.reasoning,
       },
-      cost: costOf(served, usage),
+      cost: result.cost,
       extraction,
       warnings: validate(extraction),
       matches,
@@ -224,6 +447,122 @@ agreementsRouter.post('/analyze', (req: Request, res: Response) => {
     if (!res.headersSent) res.status(500).json({ error: 'internal_error', message: err.message });
   });
 });
+
+/* -------------------------------------------------------------- the reading */
+
+async function runBatch(
+  runs: { id: string; model: string; provider: Provider }[],
+  document: ReaderDocument,
+  effort: Effort,
+  match: boolean,
+): Promise<void> {
+  await Promise.all(
+    runs.map((run) =>
+      withSlot(run.provider, async () => {
+        await query(`UPDATE agreement_runs SET status = 'running', started_at = now() WHERE id = $1`, [run.id]);
+        try {
+          const result = await read(run.model, document, effort);
+          await record(run.id, result, document.filename, match);
+        } catch (err) {
+          // readAgreement does not throw for anything a provider does; this is
+          // the database, or a bug, and the row must still stop saying running.
+          console.error(`[error] agreements run ${run.id}:`, (err as Error).stack ?? (err as Error).message);
+          await query(
+            `UPDATE agreement_runs SET status = 'failed', finished_at = now(), error = $2 WHERE id = $1`,
+            [run.id, JSON.stringify({ kind: 'internal', message: (err as Error).message })],
+          ).catch(() => undefined);
+        }
+      }),
+    ),
+  );
+}
+
+async function read(model: string, document: ReaderDocument, effort: Effort): Promise<ReadResult> {
+  const { prompt, schema } = await promptAndSchema();
+  return readAgreement({
+    modelId: model,
+    effort,
+    system: prompt,
+    schema: schema as JsonSchema,
+    document,
+    apiKeys: apiKeysFromEnv(),
+  });
+}
+
+async function record(runId: string, result: ReadResult, filename: string, match: boolean): Promise<void> {
+  const usage = {
+    input: result.usage.input,
+    output: result.usage.output,
+    cache_read: result.usage.cacheRead,
+    cache_write: result.usage.cacheWrite,
+    reasoning: result.usage.reasoning,
+  };
+
+  if (!result.ok) {
+    await query(
+      `UPDATE agreement_runs
+          SET status = 'failed', finished_at = now(), attempts = $2, usage = $3, cost = $4,
+              elapsed_ms = $5, served_model = $6, error = $7
+        WHERE id = $1`,
+      [runId, result.attempts, usage, result.cost ?? {}, result.elapsedMs, result.servedModel, JSON.stringify(result.error)],
+    );
+    return;
+  }
+
+  const extraction = finish(result.extraction!, filename);
+  const matches = match ? await matchAll(extraction).catch(() => null) : null;
+  await query(
+    `UPDATE agreement_runs
+        SET status = 'done', finished_at = now(), attempts = $2, usage = $3, cost = $4,
+            elapsed_ms = $5, served_model = $6, extraction = $7, warnings = $8, matches = $9
+      WHERE id = $1`,
+    [
+      runId,
+      result.attempts,
+      usage,
+      result.cost ?? {},
+      result.elapsedMs,
+      result.servedModel,
+      JSON.stringify(extraction),
+      JSON.stringify(validate(extraction)),
+      matches === null ? null : JSON.stringify(matches),
+    ],
+  );
+}
+
+/**
+ * Runs left 'queued' or 'running' by a server that has since restarted will
+ * never finish: their reads lived in that process's memory. They are marked as
+ * failed, once, the first time anyone looks after boot.
+ */
+let settled = false;
+async function settleInterrupted(): Promise<void> {
+  if (settled) return;
+  await query(
+    `UPDATE agreement_runs
+        SET status = 'failed', finished_at = now(),
+            error = '{"kind":"internal","message":"Interrupted by a server restart before it finished."}'::jsonb
+      WHERE status IN ('queued', 'running') AND created_at < $1`,
+    [BOOTED_AT],
+  );
+  settled = true;
+}
+
+const active: Record<Provider, number> = { anthropic: 0, openai: 0, google: 0 };
+const waiting: Record<Provider, (() => void)[]> = { anthropic: [], openai: [], google: [] };
+
+async function withSlot<T>(provider: Provider, fn: () => Promise<T>): Promise<T> {
+  while (active[provider] >= SLOTS_PER_PROVIDER) {
+    await new Promise<void>((resolve) => waiting[provider].push(resolve));
+  }
+  active[provider]++;
+  try {
+    return await fn();
+  } finally {
+    active[provider]--;
+    waiting[provider].shift()?.();
+  }
+}
 
 /**
  * Acts on one decision.
@@ -548,14 +887,23 @@ interface Extraction {
   services?: Record<string, unknown>[];
 }
 
-function contentFor(filename: string, base64?: string, text?: string): Anthropic.ContentBlockParam[] {
-  if (base64) {
-    return [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } },
-      { type: 'text', text: `File name: ${filename}` },
-    ];
-  }
-  return [{ type: 'text', text: `File name: ${filename}\n\n${text ?? ''}` }];
+/**
+ * The ids a write needs, where the model left them out. The document's own id
+ * is what makes a second reading update rather than duplicate; the file name is
+ * a worse id, but a deterministic one.
+ */
+function finish(raw: Record<string, unknown>, filename: string): Extraction {
+  const extraction = raw as unknown as Extraction;
+  extraction.document ??= {} as Extraction['document'];
+  extraction.document.external_id ||= slug(filename);
+  (extraction.services ?? []).forEach((service, i) => {
+    service['external_id'] ||= `${extraction.document.external_id}-${i + 1}`;
+  });
+  return extraction;
+}
+
+function matchAll(extraction: Extraction) {
+  return Promise.all((extraction.services ?? []).map((service) => matchOne(service)));
 }
 
 async function matchOne(service: Record<string, unknown>) {
@@ -591,83 +939,40 @@ async function matchOne(service: Record<string, unknown>) {
  *
  * Fetched from the database rather than pasted into the file, because a
  * category list that has drifted from the corpus produces tags the write path
- * then drops — a service that exists and cannot be found.
+ * then drops — a service that exists and cannot be found. The same prompt goes
+ * to every model, which is what makes their answers comparable.
  */
 let cached: { at: number; prompt: string; schema: Record<string, unknown> } | null = null;
+let pending: Promise<{ at: number; prompt: string; schema: Record<string, unknown> }> | null = null;
 const PROMPT_TTL_MS = 10 * 60 * 1000;
 
 async function promptAndSchema(): Promise<{ prompt: string; schema: Record<string, unknown> }> {
   if (cached && Date.now() - cached.at < PROMPT_TTL_MS) return cached;
-
-  const [raw, schemaText] = await Promise.all([readFile(PROMPT_FILE, 'utf8'), readFile(SCHEMA_FILE, 'utf8')]);
-  const { rows } = await query<{ id: string; axis: string; depth: number; name: string | null }>(
-    `SELECT n.id, n.axis::text AS axis, n.depth, nm.name
-       FROM taxonomy_nodes n
-       LEFT JOIN taxonomy_names nm ON nm.node_id = n.id AND nm.lang = 'he'
-      WHERE n.active
-      ORDER BY n.axis, n.depth, n.sort_order`,
-  );
-
-  const lines = (axis: string) =>
-    rows.filter((r) => r.axis === axis).map((r) => `${'  '.repeat(r.depth)}${r.id} — ${r.name ?? ''}`);
-  const responses = lines('response');
-  const situations = lines('situation');
-  const taxonomy = [
-    `RESPONSES — what the service provides (${responses.length}):`,
-    ...responses,
-    '',
-    `SITUATIONS — who it is for (${situations.length}):`,
-    ...situations,
-  ].join('\n');
-
-  const [instructions] = raw.split('\n## The document');
-  const prompt = (instructions ?? raw)
-    .replaceAll('{{TODAY}}', new Date().toISOString().slice(0, 10))
-    .replaceAll('{{TAXONOMY}}', taxonomy)
-    .replaceAll('{{SCHEMA}}', schemaText);
-
-  cached = { at: Date.now(), prompt, schema: JSON.parse(schemaText) as Record<string, unknown> };
-  return cached;
-}
-
-/** One reply's token counts, or several replies' summed. */
-interface TokenUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_input_tokens: number;
-  cache_creation_input_tokens: number;
-}
-
-/**
- * How many turns an answer gets to validate. The second exists for the
- * occasional malformed reply; a document that fails twice is a document a
- * person should look at, not one to keep paying for.
- */
-const MAX_ATTEMPTS = 2;
-
-function costOf(model: string, usage: TokenUsage) {
-  const price = PRICES[model] ?? PRICES[MODEL]!;
-  const perToken = price.input / 1_000_000;
-  const input = usage.input_tokens * perToken;
-  const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * perToken * CACHE_WRITE_MULTIPLIER;
-  const cacheRead = (usage.cache_read_input_tokens ?? 0) * perToken * CACHE_READ_MULTIPLIER;
-  const output = (usage.output_tokens * price.output) / 1_000_000;
-  return {
-    currency: 'USD',
-    input: round(input),
-    cache_write: round(cacheWrite),
-    cache_read: round(cacheRead),
-    output: round(output),
-    total: round(input + cacheWrite + cacheRead + output),
-    // What a second document in the same run costs: the prompt is written to
-    // the cache once and read cheaply after that, so the first document is not
-    // representative of the batch and should not be multiplied by ten thousand.
-    marginal: round(input + cacheRead + output + (usage.cache_creation_input_tokens ?? 0) * perToken * CACHE_READ_MULTIPLIER),
-  };
-}
-
-function round(value: number): number {
-  return Math.round(value * 1e6) / 1e6;
+  // Six models starting at once should build the prompt once, not six times —
+  // and should all send the same bytes, or the providers' caches never meet.
+  pending ??= (async () => {
+    const [template, schemaText] = await Promise.all([readFile(PROMPT_FILE, 'utf8'), readFile(SCHEMA_FILE, 'utf8')]);
+    const { rows } = await query<{ id: string; axis: string; depth: number; name: string | null }>(
+      `SELECT n.id, n.axis::text AS axis, n.depth, nm.name
+         FROM taxonomy_nodes n
+         LEFT JOIN taxonomy_names nm ON nm.node_id = n.id AND nm.lang = 'he'
+        WHERE n.active
+        ORDER BY n.axis, n.depth, n.sort_order`,
+    );
+    const prompt = buildReaderPrompt({
+      template,
+      schemaText,
+      nodes: rows,
+      today: new Date().toISOString().slice(0, 10),
+    });
+    return { at: Date.now(), prompt, schema: JSON.parse(schemaText) as Record<string, unknown> };
+  })();
+  try {
+    cached = await pending;
+    return cached;
+  } finally {
+    pending = null;
+  }
 }
 
 function validate(extraction: Extraction): string[] {
@@ -689,16 +994,6 @@ function validate(extraction: Extraction): string[] {
   }
   if (extraction.verdict?.expired) warnings.push('תוקף ההסכם פג');
   return warnings;
-}
-
-/** "" becomes null, all the way down; a blank entry in a list is dropped. */
-function blankToNull(value: unknown): unknown {
-  if (typeof value === 'string') return value.trim() === '' ? null : value;
-  if (Array.isArray(value)) return value.map(blankToNull).filter((v) => v !== null);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankToNull(v)]));
-  }
-  return value;
 }
 
 function slug(value: string): string {

@@ -136,8 +136,14 @@ two hundred PDFs costs nothing to continue. The prompt — which carries the who
 taxonomy — is cached between documents, so it is paid for once per run rather
 than once per document.
 
-PDFs go to the model as documents, up to 25 MB each. Text, Markdown, JSON, CSV
-and HTML are read as text. A `.doc` or `.docx` has to be converted first.
+PDFs go to the model as documents, up to 50 MB each; one too large to travel
+inside a request is uploaded to that provider's file store for the length of the
+read and deleted afterwards. Text, Markdown, JSON, CSV and HTML are read as text.
+A `.doc` or `.docx` has to be converted first.
+
+`--model` takes any model in the catalog (`--models` lists them with their prices
+and the key each needs), so the model chosen on the screen is the one the archive
+is read with, through the same code.
 
 Set up the source before the first push, so everything it writes is attributed
 and inherits a trust level:
@@ -156,9 +162,57 @@ hand. Raising it later is one call.
 
 Before an archive, a dozen documents — and the admin's **הסכמים** tab exists for
 exactly that. It takes a PDF or a text file, runs the same prompt and the same
-matcher as the script, and shows three things side by side: the verdict and the
-services it extracted, what the corpus already holds for each one, and what that
-document cost.
+matcher as the script, and shows the verdict and the services it extracted, what
+the corpus already holds for each one, and what that document cost.
+
+## Choosing a model
+
+The same document can be sent to up to six models at once, from three providers:
+
+| Provider | Key | Models |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | Claude Opus 5, Sonnet 5, Haiku 4.5 |
+| OpenAI | `OPENAI_API_KEY` | GPT-5.6 Sol, Terra and Luna, GPT-5.4 mini |
+| Google | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini 3.1 Pro, 3.8 Flash, 3.5 Flash-Lite |
+
+The catalog, with prices, is `packages/ingest/src/reader/models.ts` — one list for
+the screen, the script and the cost arithmetic. Prices are the ones the
+providers published in September 2026; the screen shows the date beside them.
+On opening, the screen asks each provider which models its key can use, so a
+retired id or a model not enabled on the account shows as unavailable instead of
+failing on a real document.
+
+Every model is held to the same things: the same prompt, JSON mode rather than
+each provider's structured outputs (the schema is too large for all three), the
+same validator, and the same single corrective turn. That is what makes the
+answers comparable. The effort control — how hard the model thinks — is mapped
+onto each provider's own parameter and moved to the nearest level a model
+supports; Haiku 4.5 has none.
+
+The comparison lays the runs side by side: verdict, subject, authority,
+provider, how many services, what the corpus said about them, cost, time and
+tokens. Services are lined up by name rather than by position, and every cell
+where the models disagree is marked. A service one model found and another did
+not is shown as missing, not as a different value.
+
+Every run is kept (`agreement_runs`), so the totals are measured across
+everything tried: per model, the cost per document once the prompt is cached,
+the time, the failures, and how often its verdict matched what the other models
+reading the same document said. Agreement is not accuracy — three models can
+agree and all be wrong — but it is the one quality signal that needs no answer
+key, and a model that is regularly the odd one out is the one whose readings are
+worth checking by hand.
+
+For a scanned document the providers differ most in how a page is billed, not in
+their headline rates: Gemini charges a flat 560 tokens a page, where Claude and
+GPT bill the page as an image at a resolution they choose. On a 111-page scan
+that is the difference between cents and dollars per document, which is why the
+screen reports what each run actually cost rather than estimating from a price
+list.
+
+The OpenAI and Google connectors call the providers' REST endpoints directly;
+what they send and how they read the replies is covered by
+`packages/ingest/src/reader/reader.test.ts` (`npm test`).
 
 The cost is split the way it behaves at scale. The prompt carries the whole
 taxonomy and is identical for every document, so it is written to the model's
@@ -212,6 +266,12 @@ nothing resembles — checking that each gets the answer it should, that a bare
 name is never linked on its own, that a link surfaces as provenance, and that a
 re-push cannot overturn a decision a person made. Everything is namespaced under
 a throwaway source and purged at the end.
+
+It also checks the model catalog and the batch lifecycle, without paying for a
+read: a batch is only sent to a model whose provider has no key, which fails at
+once and for nothing, and the check is that the failure is recorded, names the
+variable to set and costs zero. When every provider has a key it says so and
+skips that part.
 
 ## What this deliberately does not do
 

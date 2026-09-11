@@ -5,9 +5,14 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
-  "scripts": { "build": "tsc -p tsconfig.json" },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.124.0",
     "@ssil/core": "*",
     "@ssil/db": "*",
     "yaml": "2.8.1"

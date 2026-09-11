@@ -32,11 +32,12 @@ export function createApp(): Express {
     }),
   );
   app.use(compression());
-  // A scanned agreement is a PDF measured in megabytes, and it arrives base64
-  // encoded, which adds a third again. Registered before the general parser so
-  // that it wins for this path; body-parser skips a request another parser has
-  // already read.
-  app.use('/api/admin/agreements', express.json({ limit: '28mb' }));
+  // A scanned agreement is a PDF measured in megabytes. The screen sends it as a
+  // raw body to /batches, which parses it itself; /analyze still takes it base64
+  // encoded inside JSON, which adds a third again — 50 MB becomes 67. Registered
+  // before the general parser so that it wins for this path; body-parser skips
+  // a request another parser has already read.
+  app.use('/api/admin/agreements', express.json({ limit: '70mb' }));
   app.use(express.json({ limit: '5mb' }));
 
   // The read API is public data and is meant to be called from anywhere,

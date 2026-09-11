@@ -300,6 +300,9 @@ async function main() {
       after.body?.links?.[0]?.status === 'rejected', JSON.stringify(after.body?.links?.[0]));
   }
 
+  console.log('\nreading with several models');
+  await readingChecks();
+
   console.log('\ncleaning up');
   {
     await call(`/api/admin/keys/${keyRes.body.id}`, { method: 'DELETE', token: ADMIN_TOKEN });
@@ -316,6 +319,90 @@ async function main() {
     for (const f of failures) console.log(`  - ${f}`);
     process.exit(1);
   }
+}
+
+/**
+ * The model catalog and the batch lifecycle.
+ *
+ * These checks never pay for a read. A batch is only sent to a model whose
+ * provider has no key on the server, which fails at once and for nothing — and
+ * that failure is itself the thing worth checking: that it is recorded as a
+ * result, names the missing variable, and costs zero. When every provider has a
+ * key there is no free model to send to, and the lifecycle checks say so and
+ * stand down rather than spend money.
+ */
+async function readingChecks() {
+  const unauth = await call('/api/admin/agreements/models');
+  check('the model catalog needs a signed-in editor', unauth.status === 401 || unauth.status === 403, `status ${unauth.status}`);
+
+  const catalog = await call('/api/admin/agreements/models', { token: ADMIN_TOKEN });
+  check('the model catalog answers', catalog.status === 200, JSON.stringify(catalog.body).slice(0, 200));
+  const models = catalog.body?.models ?? [];
+  const providers = catalog.body?.providers ?? [];
+  check('three providers are listed', new Set(providers.map((p) => p.id)).size === 3, providers.map((p) => p.id).join(','));
+  check('every model carries a price and an availability', models.length >= 3 && models.every((m) => m.prices?.input > 0 && typeof m.available === 'boolean'));
+  for (const p of providers) {
+    const listed = models.filter((m) => m.provider === p.id && m.listed === false).map((m) => m.id);
+    check(
+      `${p.id}: ${p.configured ? (p.reachable ? 'key works' : 'key set but the provider could not be asked') : 'no key set'}`,
+      !p.configured || p.reachable !== false,
+      p.error,
+    );
+    if (p.configured && p.reachable) {
+      check(`${p.id}: every catalog model is offered to this key`, listed.length === 0, `not listed: ${listed.join(', ')}`);
+    }
+  }
+
+  const batch = (models, body, contentType = 'text/plain; charset=utf-8') =>
+    fetch(`${BASE}/api/admin/agreements/batches?${new URLSearchParams({ filename: 'smoke-batch.txt', models: models.join(','), effort: 'low' })}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}`, 'content-type': contentType },
+      body,
+    }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }));
+
+  const any = models[0]?.id ?? 'claude-opus-5';
+  const noModels = await batch([], 'x'.repeat(50));
+  check('a batch with no model is refused', noModels.status === 400, JSON.stringify(noModels.body));
+  const unknown = await batch(['not-a-model'], 'x'.repeat(50));
+  check('a model outside the catalog is refused', unknown.status === 400 && /not-a-model/.test(unknown.body?.message ?? ''), JSON.stringify(unknown.body));
+  const empty = await batch([any], '');
+  check('an empty document is refused', empty.status === 400, JSON.stringify(empty.body));
+  const bogus = await call('/api/admin/agreements/batches/not-a-uuid', { token: ADMIN_TOKEN });
+  check('a batch id that is not an id is simply not found', bogus.status === 404, `status ${bogus.status}`);
+
+  const free = models.find((m) => !providers.find((p) => p.id === m.provider)?.configured);
+  if (!free) {
+    console.log('  --   every provider has a key; skipping the batch lifecycle rather than paying for a read');
+    return;
+  }
+
+  const created = await batch([free.id], 'הסכם בדיקה. '.repeat(20));
+  check('a batch is accepted at once', created.status === 202 && created.body?.runs?.length === 1, JSON.stringify(created.body));
+  const batchId = created.body?.batch_id;
+  if (!batchId) return;
+
+  let runs = [];
+  for (let i = 0; i < 20; i++) {
+    const res = await call(`/api/admin/agreements/batches/${batchId}`, { token: ADMIN_TOKEN });
+    runs = res.body?.runs ?? [];
+    if (runs.length && runs.every((r) => r.status === 'done' || r.status === 'failed')) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const run = runs[0];
+  check('a model without a key fails as a recorded result', run?.status === 'failed' && run?.error?.kind === 'not_configured', JSON.stringify(run?.error));
+  check('the failure names the variable to set', (run?.error?.message ?? '').includes('_API_KEY'), run?.error?.message);
+  check('a read that never happened costs nothing', (run?.cost?.total ?? 0) === 0, JSON.stringify(run?.cost));
+
+  const history = await call('/api/admin/agreements/batches?limit=10', { token: ADMIN_TOKEN });
+  check('the batch is in the history', (history.body?.batches ?? []).some((b) => b.batch_id === batchId));
+  const stats = await call('/api/admin/agreements/stats', { token: ADMIN_TOKEN });
+  check('the totals count the failed run against its model',
+    (stats.body?.models ?? []).some((s) => s.model === free.id && s.failed >= 1), JSON.stringify(stats.body).slice(0, 200));
+
+  const removed = await call(`/api/admin/agreements/batches/${batchId}`, { method: 'DELETE', token: ADMIN_TOKEN });
+  check('a batch can be removed from the history', removed.status === 200 && removed.body?.deleted === 1, JSON.stringify(removed.body));
+  const gone = await call(`/api/admin/agreements/batches/${batchId}`, { token: ADMIN_TOKEN });
+  check('and is gone', gone.status === 404, `status ${gone.status}`);
 }
 
 main().catch((err) => {

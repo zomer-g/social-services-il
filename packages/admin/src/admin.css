@@ -209,3 +209,63 @@ label.check { display: flex; align-items: center; gap: 0.35rem; }
 .cardlist li { margin: 0.2rem 0; }
 /* A card the search returned that has since been deleted. */
 .cardlist li.gone { text-decoration: line-through; }
+
+/*
+ * Agreements: choosing models and comparing what they read.
+ *
+ * Amber marks the one thing the comparison is for — a place where the models
+ * disagree — so it is the only colour in the table. A service a model did not
+ * extract at all is struck through in grey rather than coloured: it is an
+ * absence, not a disagreement about a value.
+ */
+.small { font-size: 0.8rem; }
+.btn.disabled { opacity: 0.6; cursor: not-allowed; }
+
+.models { margin: 1rem 0; }
+.models-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1rem; }
+.models-head h2 { margin: 0; }
+.models-head form.inline { margin: 0.25rem 0; margin-inline-start: auto; }
+.providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0.75rem; margin-top: 0.5rem; }
+.provider { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.8rem; }
+.provider h3 { margin: 0 0 0.4rem; font-size: 0.95rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.model {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  column-gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.model input { align-self: center; }
+.model-price { font-variant-numeric: tabular-nums; font-size: 0.85rem; direction: ltr; }
+.model-note { grid-column: 2 / -1; font-size: 0.78rem; }
+.model.unavailable { opacity: 0.55; cursor: not-allowed; }
+
+.scroll { overflow-x: auto; }
+table.compare th:first-child { white-space: nowrap; width: 1%; }
+table.compare td { min-width: 9rem; }
+td.differs { background: var(--warn-soft); box-shadow: inset 3px 0 0 var(--warn); }
+td.missing { color: var(--muted); text-decoration: line-through; }
+tr.current td { background: var(--surface-2); }
+
+.batch { margin-top: 1.25rem; }
+.batch-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1rem; }
+.batch-head h3 { margin: 0; }
+.batch-head .rowactions { margin-inline-start: auto; }
+
+.tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.tabs button {
+  font: inherit;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.tabs button.active { background: var(--surface-2); border-color: var(--border); font-weight: 600; }
+
+.service { border-top: 1px solid var(--border); padding-top: 0.6rem; margin-top: 0.6rem; }
+.service > p { margin: 0.4rem 0; }

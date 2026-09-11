@@ -8,8 +8,8 @@
  *   --url <base>        target instance (default http://localhost:3000)
  *   --key <api-key>     ingest key; or set INGEST_KEY. Needed for --match/--push
  *   --out <dir>         where per-document JSON goes (default ./agreements-out)
- *   --model <id>        default claude-opus-5
- *   --effort <level>    low | medium | high | xhigh | max (default high)
+ *   --model <id>        any model in the catalog (default claude-opus-5); --models lists them
+ *   --effort <level>    low | medium | high (default high), moved to the nearest level a model has
  *   --concurrency <n>   documents read at once (default 3)
  *   --limit <n>         stop after n documents
  *   --resume            skip documents that already have output
@@ -33,15 +33,22 @@
  * are, not for publishing them.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import { parseJsonObject, schemaErrors } from '@ssil/core';
+import {
+  apiKeysFromEnv,
+  buildReaderPrompt,
+  DEFAULT_MODEL,
+  MODELS,
+  modelSpec,
+  PROVIDER_KEYS,
+  readAgreement,
+} from '@ssil/ingest';
 import { readdir, readFile, mkdir, writeFile, stat } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 /** Options that take no value, so the token after them is the positional. */
-const VALUELESS = new Set(['match', 'push', 'commit', 'resume']);
+const VALUELESS = new Set(['match', 'push', 'commit', 'resume', 'models']);
 
 const flag = (name) => args.includes(`--${name}`);
 const opt = (name, fallback) => {
@@ -60,8 +67,19 @@ for (let i = 0; i < args.length; i++) {
 }
 const target = positional[0];
 
+if (flag('models')) {
+  for (const m of MODELS) {
+    const keyed = PROVIDER_KEYS[m.provider].some((name) => process.env[name]);
+    console.log(
+      `${m.id.padEnd(24)} ${m.label.padEnd(24)} $${m.prices.input} in / $${m.prices.output} out` +
+        `${keyed ? '' : `   (needs ${PROVIDER_KEYS[m.provider].join(' or ')})`}`,
+    );
+  }
+  process.exit(0);
+}
+
 if (!target) {
-  console.error('Usage: node scripts/agreements.mjs <directory-or-file> [--match] [--push] [--commit]');
+  console.error('Usage: node scripts/agreements.mjs <directory-or-file> [--model id] [--match] [--push] [--commit]');
   process.exit(1);
 }
 
@@ -72,8 +90,22 @@ const SCHEMA_FILE = join(HERE, '..', 'prompts', 'agreement-extraction.schema.jso
 const BASE = opt('url', process.env.BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const KEY = opt('key', process.env.INGEST_KEY ?? '');
 const OUT = resolve(opt('out', './agreements-out'));
-const MODEL = opt('model', 'claude-opus-5');
+const MODEL = opt('model', DEFAULT_MODEL);
 const EFFORT = opt('effort', 'high');
+const SPEC = modelSpec(MODEL);
+if (!SPEC) {
+  console.error(`[error] no model called ${MODEL}. Run with --models to list them.`);
+  process.exit(1);
+}
+if (!['low', 'medium', 'high'].includes(EFFORT)) {
+  console.error(`[error] --effort is low, medium or high, not ${EFFORT}`);
+  process.exit(1);
+}
+const API_KEYS = apiKeysFromEnv();
+if (!API_KEYS[SPEC.provider]) {
+  console.error(`[error] ${MODEL} needs ${PROVIDER_KEYS[SPEC.provider].join(' or ')} in the environment`);
+  process.exit(1);
+}
 const CONCURRENCY = Math.max(1, Number(opt('concurrency', '3')) || 3);
 const LIMIT = Number(opt('limit', '0')) || 0;
 const TODAY = opt('today', new Date().toISOString().slice(0, 10));
@@ -85,15 +117,11 @@ const COMMIT = flag('commit');
 /** What the model can be handed directly, and what has to be converted first. */
 const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.csv', '.html', '.htm', '.xml']);
 const PDF_EXTENSION = '.pdf';
-/** The API's own ceiling is 32 MB for the whole request. */
-const MAX_PDF_BYTES = 25 * 1024 * 1024;
 /**
- * Turns an answer gets to validate. The second is for the occasional malformed
- * reply; a document that fails twice goes in the report for a person.
+ * Google and OpenAI take PDFs up to 50 MB. A larger one goes to each provider's
+ * file upload rather than inside the request, but it is still better split.
  */
-const MAX_ATTEMPTS = 2;
-
-const client = new Anthropic();
+const MAX_PDF_BYTES = 50 * 1024 * 1024;
 
 main().catch((err) => {
   console.error(`[error] ${err.stack ?? err.message}`);
@@ -133,7 +161,7 @@ async function main() {
         const n = result.extraction?.services?.length ?? 0;
         console.log(`[read] ${basename(file)} → ${result.extraction?.verdict?.decision ?? 'failed'}, ${n} service(s)`);
       } catch (err) {
-        const failure = { file, error: err.message, ...(err.usage ? { usage: err.usage, attempts: err.attempts } : {}) };
+        const failure = { file, error: err.message, ...(err.usage ? { usage: err.usage, cost: err.cost, attempts: err.attempts } : {}) };
         results.push(failure);
         await writeFile(outFile, JSON.stringify(failure, null, 2), 'utf8');
         console.error(`[fail] ${basename(file)}: ${err.message}`);
@@ -164,114 +192,58 @@ async function main() {
  * and it is exactly where a service nobody has yet collected would belong.
  */
 async function buildPrompt() {
-  const raw = await readFile(PROMPT_FILE, 'utf8');
-  const schema = await readFile(SCHEMA_FILE, 'utf8');
-  const [responses, situations] = await Promise.all([
+  const [template, schemaText, responses, situations] = await Promise.all([
+    readFile(PROMPT_FILE, 'utf8'),
+    readFile(SCHEMA_FILE, 'utf8'),
     fetchTaxonomy('response'),
     fetchTaxonomy('situation'),
   ]);
-
-  const taxonomy = [
-    `RESPONSES — what the service provides (${responses.length}):`,
-    ...responses.map((n) => `${'  '.repeat(n.depth)}${n.id} — ${n.name ?? ''}`),
-    '',
-    `SITUATIONS — who it is for (${situations.length}):`,
-    ...situations.map((n) => `${'  '.repeat(n.depth)}${n.id} — ${n.name ?? ''}`),
-  ].join('\n');
-
-  // Everything after this heading is the document itself, which the API takes
-  // as its own content block rather than as text inside the instructions.
-  const [instructions] = raw.split('\n## The document');
-  return instructions
-    .replaceAll('{{TODAY}}', TODAY)
-    .replaceAll('{{TAXONOMY}}', taxonomy)
-    .replaceAll('{{SCHEMA}}', schema);
+  // The same assembly the screen uses, so a document read here and the same
+  // document read there were given the same instructions.
+  return buildReaderPrompt({ template, schemaText, nodes: [...responses, ...situations], today: TODAY });
 }
 
 async function fetchTaxonomy(axis) {
   const res = await fetch(`${BASE}/api/v1/taxonomy?axis=${axis}&lang=he&include_empty=true`);
   if (!res.ok) throw new Error(`taxonomy fetch failed: ${res.status} ${await res.text()}`);
   const body = await res.json();
-  return body.nodes ?? [];
+  return (body.nodes ?? []).map((n) => ({ id: n.id, axis: n.axis ?? axis, depth: n.depth, name: n.name }));
 }
 
 async function readDocument(file, prompt, schema) {
-  const content = await contentFor(file);
+  const document = await documentFor(file);
 
-  // The shape is held by the prompt and checked here, not enforced by
-  // structured outputs, whose compiled grammar this schema exceeds (see
-  // docs/agreements.md). An answer that does not validate gets one corrective
-  // turn. Every turn is billed, and every turn is counted.
-  const conversation = [{ role: 'user', content }];
-  const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
-  let served = MODEL;
-  let extraction = null;
-  let problems = [];
-  let attempts = 0;
+  // The shared reader: any provider, the shape checked against the schema on
+  // arrival, one corrective turn for an answer that does not validate, and the
+  // spend counted on every turn whether or not the document succeeds.
+  const result = await readAgreement({
+    modelId: MODEL,
+    effort: EFFORT,
+    system: prompt,
+    schema,
+    document,
+    apiKeys: API_KEYS,
+  });
 
-  while (attempts < MAX_ATTEMPTS && !extraction) {
-    attempts++;
-    const message = await client.messages
-      .stream({
-        model: MODEL,
-        max_tokens: 16000,
-        // The prompt carries the whole taxonomy and does not change between
-        // documents, so it is the cacheable prefix and the document is what
-        // varies after it.
-        system: [{ type: 'text', text: prompt, cache_control: { type: 'ephemeral' } }],
-        thinking: { type: 'adaptive' },
-        output_config: { effort: EFFORT },
-        messages: conversation,
-      })
-      .finalMessage();
+  const usage = {
+    input: result.usage.input,
+    output: result.usage.output,
+    cache_read: result.usage.cacheRead,
+    cache_write: result.usage.cacheWrite,
+    reasoning: result.usage.reasoning,
+  };
 
-    served = message.model;
-    usage.input += message.usage.input_tokens;
-    usage.output += message.usage.output_tokens;
-    usage.cache_read += message.usage.cache_read_input_tokens ?? 0;
-    usage.cache_write += message.usage.cache_creation_input_tokens ?? 0;
-
-    if (message.stop_reason === 'refusal') {
-      throw Object.assign(
-        new Error(`the model declined this document (${message.stop_details?.category ?? 'no category'})`),
-        { usage, attempts },
-      );
-    }
-
-    const text = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-    const parsed = parseJsonObject(text);
-    problems = parsed.ok ? schemaErrors(schema, parsed.value) : [parsed.error];
-    if (message.stop_reason === 'max_tokens') problems.unshift('The reply was cut off at the output limit.');
-
-    if (parsed.ok && problems.length === 0) {
-      // "" is how the schema says "not in the document"; the rest of this
-      // script means that by null, so convert once.
-      extraction = blankToNull(parsed.value);
-      break;
-    }
-
-    // Append-only: the reply goes back as it came, then what was wrong with it.
-    conversation.push({ role: 'assistant', content: message.content });
-    conversation.push({
-      role: 'user',
-      content: [
-        'That reply does not match the schema:',
-        ...problems.slice(0, 20).map((p) => `- ${p}`),
-        '',
-        'Reply with the corrected JSON object only.',
-      ].join('\n'),
+  if (!result.ok) {
+    // The spend travels with the failure, so the report's total is what was
+    // actually paid rather than what the successful documents cost.
+    throw Object.assign(new Error(`${result.error.kind}: ${result.error.message}`), {
+      usage,
+      cost: result.cost,
+      attempts: result.attempts,
     });
   }
 
-  if (!extraction) {
-    // The spend travels with the failure, so the report's total is what was
-    // actually paid rather than what the successful documents cost.
-    throw Object.assign(
-      new Error(`no valid answer after ${attempts} attempt(s): ${problems.slice(0, 3).join('; ')}`),
-      { usage, attempts },
-    );
-  }
-
+  const extraction = result.extraction;
   // The document's own id is what makes a second run update rather than
   // duplicate, and a model asked for a stable one still sometimes leaves it
   // empty. The file name is a worse id but a deterministic one.
@@ -285,29 +257,29 @@ async function readDocument(file, prompt, schema) {
   return {
     file,
     read_at: new Date().toISOString(),
-    model: served,
-    attempts,
+    model: result.servedModel ?? MODEL,
+    effort: result.effort,
+    attempts: result.attempts,
+    elapsed_ms: result.elapsedMs,
     usage,
+    cost: result.cost,
     extraction,
     warnings: validate(extraction),
   };
 }
 
-async function contentFor(file) {
+async function documentFor(file) {
   const ext = extname(file).toLowerCase();
   if (ext === PDF_EXTENSION) {
     const bytes = await readFile(file);
     if (bytes.length > MAX_PDF_BYTES) {
       throw new Error(`${(bytes.length / 1e6).toFixed(1)} MB is over the ${MAX_PDF_BYTES / 1e6} MB limit; split it first`);
     }
-    return [
-      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: bytes.toString('base64') } },
-      { type: 'text', text: `File name: ${basename(file)}` },
-    ];
+    return { filename: basename(file), pdf: bytes };
   }
-  const text = await readFile(file, 'utf8');
-  return [{ type: 'text', text: `File name: ${basename(file)}\n\n${text}` }];
+  return { filename: basename(file), text: await readFile(file, 'utf8') };
 }
+
 
 /**
  * Checks the extraction against the rules the write API will enforce anyway,
@@ -432,6 +404,9 @@ function renderReport(results) {
   const decisions = { link: 0, review: 0, new: 0 };
   let services = 0;
   let cost = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+  let spent = 0;
+  let marginal = 0;
+  let read = 0;
 
   for (const r of results) {
     if (!r.extraction) counts.failed++;
@@ -439,10 +414,15 @@ function renderReport(results) {
     services += servicesOf(r).length;
     for (const m of r.match ?? []) decisions[m.decision]++;
     for (const key of Object.keys(cost)) cost[key] += r.usage?.[key] ?? 0;
+    spent += r.cost?.total ?? 0;
+    if (r.extraction && r.cost) {
+      marginal += r.cost.marginal;
+      read++;
+    }
   }
 
   lines.push('# Agreements', '');
-  lines.push(`${results.length} document(s) read on ${new Date().toISOString().slice(0, 10)} against ${BASE}.`, '');
+  lines.push(`${results.length} document(s) read with ${MODEL} (effort ${EFFORT}) on ${new Date().toISOString().slice(0, 10)} against ${BASE}.`, '');
   lines.push('| | |', '| --- | --- |');
   lines.push(`| Describe a service | ${counts.relevant} |`);
   lines.push(`| Describe one but not usably | ${counts.partial} |`);
@@ -457,6 +437,12 @@ function renderReport(results) {
   lines.push(
     `| Tokens | ${cost.input.toLocaleString()} in, ${cost.output.toLocaleString()} out, ${cost.cache_read.toLocaleString()} cached |`,
   );
+  lines.push(`| Spent | $${spent.toFixed(3)} |`);
+  if (read) {
+    // Marginal, not total: the first document pays to cache the prompt and is
+    // not what the thousandth one costs.
+    lines.push(`| Per document, once the prompt is cached | $${(marginal / read).toFixed(4)} — $${((marginal / read) * 1000).toFixed(0)} per thousand |`);
+  }
   lines.push('');
 
   const needsPerson = results.filter(
@@ -512,16 +498,6 @@ function countReview(results) {
 function forApi(service) {
   const { confidence, source_quotes, ...rest } = service;
   return stripNulls(rest);
-}
-
-/** "" becomes null, all the way down; a blank entry in a list is dropped. */
-function blankToNull(value) {
-  if (typeof value === 'string') return value.trim() === '' ? null : value;
-  if (Array.isArray(value)) return value.map(blankToNull).filter((v) => v !== null);
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, blankToNull(v)]));
-  }
-  return value;
 }
 
 function stripNulls(value) {
