@@ -240,7 +240,6 @@ label.check { display: flex; align-items: center; gap: 0.35rem; }
 .model input { align-self: center; }
 .model-price { font-variant-numeric: tabular-nums; font-size: 0.85rem; direction: ltr; }
 .model-note { grid-column: 2 / -1; font-size: 0.78rem; }
-.model.unavailable { opacity: 0.55; cursor: not-allowed; }
 
 .scroll { overflow-x: auto; }
 table.compare th:first-child { white-space: nowrap; width: 1%; }

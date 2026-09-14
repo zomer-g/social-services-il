@@ -267,12 +267,22 @@ export function Agreements() {
   useEffect(() => store('agreements.models', selected), [selected]);
   useEffect(() => store('agreements.effort', effort), [effort]);
 
-  // A model chosen earlier that has since become unavailable is not silently
-  // sent; it stays ticked but greyed, and is left out of the request.
+  // Only models that can be used are offered. A choice remembered from before a
+  // key was removed is left out of the request rather than sent to fail.
   const usable = useMemo(
     () => selected.filter((id) => catalog?.models.find((m) => m.id === id)?.available),
     [selected, catalog],
   );
+
+  // With nothing usable ticked — a first visit, or the remembered choice has no
+  // key any more — start from the default model if it can be used, otherwise
+  // from the first one that can.
+  useEffect(() => {
+    if (!catalog || usable.length > 0) return;
+    const available = catalog.models.filter((m) => m.available);
+    const start = available.find((m) => m.id === catalog.default_model) ?? available[0];
+    if (start) setSelected([start.id]);
+  }, [catalog, usable.length]);
 
   const refreshHistory = useCallback(() => setHistoryNonce((n) => n + 1), []);
 
@@ -448,54 +458,66 @@ function ModelPicker({
         </form>
       </div>
 
-      <div className="providers">
-        {catalog.providers.map((provider) => {
-          const models = catalog.models.filter((m) => m.provider === provider.id);
-          return (
-            <div key={provider.id} className="provider">
-              <h3>
-                {provider.label}{' '}
-                {!provider.configured ? (
-                  <span className="pill bad">חסר {provider.key_names.join(' או ')}</span>
-                ) : provider.reachable === false ? (
-                  <span className="pill bad" title={provider.error}>
-                    המפתח לא עובד
-                  </span>
-                ) : (
-                  <span className="pill ok">מחובר</span>
-                )}
-              </h3>
-              {provider.reachable === false && provider.error && <p className="error small">{provider.error}</p>}
-              {models.map((m) => {
-                const checked = selected.includes(m.id);
-                const reason = !provider.configured
-                  ? 'אין מפתח לספק'
-                  : m.listed === false
-                    ? 'המודל לא זמין בחשבון הזה'
-                    : null;
-                return (
-                  <label key={m.id} className={`model${m.available ? '' : ' unavailable'}`} title={reason ?? m.note ?? m.id}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!m.available && !checked}
-                      onChange={() => toggle(m.id)}
-                    />
-                    <span className="model-name">
-                      {m.label} <span className="muted">· {TIER_LABELS[m.tier]}</span>
-                    </span>
-                    <span className="model-price nowrap">
-                      ${m.prices.input} / ${m.prices.output}
-                    </span>
-                    {(reason || m.note) && <span className="model-note muted">{reason ?? m.note}</span>}
-                    {m.efforts.length === 0 && <span className="model-note muted">ללא שליטה בעומק החשיבה</span>}
-                  </label>
-                );
-              })}
-            </div>
-          );
-        })}
-      </div>
+      {/*
+        Only providers with a key are offered, and within them only the models
+        the key can reach. The rest are named once, underneath, so it stays clear
+        how to add them.
+      */}
+      {catalog.providers.every((p) => !p.configured) ? (
+        <p className="banner">
+          לא הוגדר מפתח לאף ספק. יש להגדיר בשרת אחד מאלה:{' '}
+          {catalog.providers.map((p) => p.key_names[0]).join(', ')}.
+        </p>
+      ) : (
+        <div className="providers">
+          {catalog.providers
+            .filter((provider) => provider.configured)
+            .map((provider) => {
+              const models = catalog.models.filter((m) => m.provider === provider.id && m.available);
+              const hidden = catalog.models.filter((m) => m.provider === provider.id && !m.available);
+              return (
+                <div key={provider.id} className="provider">
+                  <h3>
+                    {provider.label}{' '}
+                    {provider.reachable === false ? (
+                      <span className="pill bad" title={provider.error}>
+                        המפתח לא עובד
+                      </span>
+                    ) : (
+                      <span className="pill ok">מחובר</span>
+                    )}
+                  </h3>
+                  {provider.reachable === false && provider.error && <p className="error small">{provider.error}</p>}
+                  {models.map((m) => (
+                    <label key={m.id} className="model" title={m.note ?? m.id}>
+                      <input type="checkbox" checked={selected.includes(m.id)} onChange={() => toggle(m.id)} />
+                      <span className="model-name">
+                        {m.label} <span className="muted">· {TIER_LABELS[m.tier]}</span>
+                      </span>
+                      <span className="model-price nowrap">
+                        ${m.prices.input} / ${m.prices.output}
+                      </span>
+                      {m.note && <span className="model-note muted">{m.note}</span>}
+                      {m.efforts.length === 0 && <span className="model-note muted">ללא שליטה בעומק החשיבה</span>}
+                    </label>
+                  ))}
+                  {hidden.length > 0 && (
+                    <p className="muted small">לא זמינים למפתח הזה: {hidden.map((m) => m.label).join(', ')}</p>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      )}
+      {catalog.providers.some((p) => !p.configured) && (
+        <p className="muted small">
+          ספקים נוספים יופיעו כאן כשיוגדר להם מפתח בשרת:{' '}
+          {catalog.providers
+            .filter((p) => !p.configured)
+            .map((p) => `${p.label} (${p.key_names.join(' או ')})`)
+            .join(' · ')}
+        </p>
+      )}
     </section>
   );
 }
