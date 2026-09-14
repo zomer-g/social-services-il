@@ -36,11 +36,29 @@ async function check(provider: Provider, key: string | undefined): Promise<Provi
     return {
       configured: true,
       reachable: true,
-      listed: Object.fromEntries(catalog.map((id) => [id, available.has(id)])),
+      listed: Object.fromEntries(catalog.map((id) => [id, isListed(id, available)])),
     };
   } catch (err) {
     return { configured: true, reachable: false, error: (err as Error).message.slice(0, 300), listed: {} };
   }
+}
+
+/**
+ * Whether a catalog id is among the ids a provider lists.
+ *
+ * Providers list dated snapshots and not always the alias that points at them:
+ * Anthropic answers `claude-haiku-4-5-20251001` and never `claude-haiku-4-5`,
+ * though a request for either works. So an id also counts as listed when a
+ * snapshot of it is — but only a snapshot, a date or a three-digit revision
+ * after the name. A prefix alone is not enough: `gemini-3.8-flash-lite` is a
+ * different model from `gemini-3.8-flash`, not a version of it.
+ */
+export function isListed(id: string, available: Set<string>): boolean {
+  if (available.has(id)) return true;
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const snapshot = new RegExp(`^${escaped}-(\\d{8}|\\d{4}-\\d{2}(-\\d{2})?|\\d{3})$`);
+  for (const candidate of available) if (snapshot.test(candidate)) return true;
+  return false;
 }
 
 async function list(provider: Provider, key: string): Promise<Set<string>> {

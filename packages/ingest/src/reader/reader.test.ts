@@ -7,6 +7,7 @@ import { costOf, effortFor, MODELS, modelSpec } from './models.js';
 import { openaiRequestBody, parseOpenAIResponse } from './openai.js';
 import { buildReaderPrompt } from './prompt.js';
 import { ReaderError } from './types.js';
+import { isListed } from './verify.js';
 
 /**
  * The parts of reading that can be checked without a key or a network: what is
@@ -63,6 +64,21 @@ describe('cost', () => {
     });
     assert.equal(cost.input, 1);
     assert.equal(cost.output, 0.018);
+  });
+});
+
+describe('availability', () => {
+  it('counts a dated snapshot as the model it is a snapshot of', () => {
+    // Anthropic lists the snapshot and not the alias, and a read with the
+    // alias works — so the alias must not be reported as unavailable.
+    assert.equal(isListed('claude-haiku-4-5', new Set(['claude-haiku-4-5-20251001'])), true);
+    assert.equal(isListed('gpt-5.6-terra', new Set(['gpt-5.6-terra-2026-08'])), true);
+    assert.equal(isListed('gemini-3.8-flash', new Set(['gemini-3.8-flash-001'])), true);
+  });
+
+  it('does not count a different model that shares the prefix', () => {
+    assert.equal(isListed('gemini-3.8-flash', new Set(['gemini-3.8-flash-lite'])), false);
+    assert.equal(isListed('gpt-5.4', new Set(['gpt-5.4-mini'])), false);
   });
 });
 
