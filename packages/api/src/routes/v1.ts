@@ -3,6 +3,7 @@ import { query, searchCards } from '@ssil/db';
 import { LANGS, type Lang } from '@ssil/core';
 import { BadRequest, bbox, int, list, num, oneOf, point, str } from '../params.js';
 import { outcomeFor, recordSearch } from '../searchlog.js';
+import { buildAnalytics, type AnalyticsPayload, type CardRow, type TaxonomyRow } from '../analytics.js';
 
 /**
  * The public read API.
@@ -243,6 +244,51 @@ v1Router.get(
         (SELECT max(updated_at) FROM cards)                                     AS last_updated
     `);
     res.set('Cache-Control', CACHE).json(rows[0] ?? {});
+  }),
+);
+
+/**
+ * The dashboard's dataset: every card, dictionary-encoded, with each town's
+ * district and population attached. See analytics.ts for the shape and why.
+ *
+ * Built once per language and held for ten minutes. It reads the whole cards
+ * table, and the corpus only changes on publish, so rebuilding it per request
+ * would be work for nothing.
+ */
+const analyticsCache = new Map<Lang, { at: number; body: AnalyticsPayload }>();
+const ANALYTICS_TTL_MS = 10 * 60_000;
+
+v1Router.get(
+  '/analytics',
+  handle(async (req, res) => {
+    const lang = langOf(req);
+    const cached = analyticsCache.get(lang);
+    if (cached && Date.now() - cached.at < ANALYTICS_TTL_MS) {
+      res.set('Cache-Control', CACHE).json(cached.body);
+      return;
+    }
+
+    const [cards, taxonomy] = await Promise.all([
+      query<CardRow>(
+        `SELECT service_id, organization_id, organization_name, organization_kind, city,
+                ST_Y(geom::geometry) AS lat, ST_X(geom::geometry) AS lon,
+                national_service, location_accurate, phone_numbers, response_ids, situation_ids
+           FROM cards
+          ORDER BY card_id`,
+      ),
+      query<TaxonomyRow>(
+        `SELECT n.id, n.axis::text AS axis, n.parent_id, nm.name
+           FROM taxonomy_nodes n
+           LEFT JOIN taxonomy_names nm ON nm.node_id = n.id AND nm.lang = $1
+          WHERE n.active
+          ORDER BY n.axis, n.depth, n.sort_order`,
+        [lang],
+      ),
+    ]);
+
+    const body = buildAnalytics(cards.rows, taxonomy.rows);
+    analyticsCache.set(lang, { at: Date.now(), body });
+    res.set('Cache-Control', CACHE).json(body);
   }),
 );
 

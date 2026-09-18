@@ -149,6 +149,18 @@ export const openapi = {
     '/api/v1/stats': {
       get: { tags: ['Bulk'], summary: 'Corpus size and freshness', responses: { 200: { description: 'Counts and the most recent update.' } } },
     },
+    '/api/v1/analytics': {
+      get: {
+        tags: ['Bulk'],
+        summary: 'The whole corpus in a compact form for analysis',
+        description:
+          'Every card, dictionary-encoded and columnar, with each town matched to its CBS district, ' +
+          'sub-district, population and sector. This is what the dashboard at /dashboard runs on. ' +
+          'Taxonomy names are in the requested language.',
+        parameters: [{ name: 'lang', in: 'query', schema: { type: 'string', enum: ['he', 'ar', 'ru', 'en'] } }],
+        responses: { 200: { description: 'Dictionaries (districts, kinds, taxonomy, orgs, cities) and card columns that index into them.' } },
+      },
+    },
     '/api/v1/export/cards.ndjson': {
       get: {
         tags: ['Bulk'],

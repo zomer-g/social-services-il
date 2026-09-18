@@ -16,21 +16,34 @@ export function ActionCard({
   lang,
   saved,
   onToggleSave,
+  labels,
 }: {
   card: Card;
   lang: Lang;
   saved: boolean;
   onToggleSave: (cardId: string) => void;
+  /** Category names by id, when the caller has them; a card without them just shows no tags. */
+  labels?: ReadonlyMap<string, string>;
 }) {
   const t = stringsFor(lang);
   const phone = card.phone_numbers[0];
   const distanceKm = card.distance_m != null ? (card.distance_m / 1000).toFixed(1) : null;
+  // The most specific categories first: a leaf says more than its parent, and
+  // two tags is as many as a glance takes in.
+  const tags = labels
+    ? [...card.response_ids]
+        .sort((a, b) => b.split(':').length - a.split(':').length)
+        .map((id) => labels.get(id))
+        .filter((name, i, all): name is string => !!name && all.indexOf(name) === i)
+        .slice(0, 2)
+    : [];
 
   return (
     <li className="card">
       <h3>
         <Link to={`/s/${card.card_id}${window.location.search}`}>{card.service_name}</Link>
       </h3>
+      <p className="org">{card.organization_short_name ?? card.organization_name}</p>
 
       {card.service_description && <p className="desc">{card.service_description}</p>}
 
@@ -39,11 +52,20 @@ export function ActionCard({
           <span className="tag national">{t.nationwide}</span>
         ) : (
           <>
-            {card.city && <span className="where">{card.city}</span>}
+            {card.city && (
+              <span className="where">
+                <span aria-hidden="true">📍 </span>
+                {card.city}
+              </span>
+            )}
             {distanceKm && <span>{t.distanceAway(distanceKm)}</span>}
           </>
         )}
-        <span>{card.organization_short_name ?? card.organization_name}</span>
+        {tags.map((name) => (
+          <span key={name} className="tag">
+            {name}
+          </span>
+        ))}
         {card.other_organizations > 0 ? (
           <span>{t.alsoOfferedBy(card.other_organizations)}</span>
         ) : (
@@ -60,7 +82,7 @@ export function ActionCard({
       <div className="actions">
         {phone && (
           <a className="btn" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>
-            {t.call} {phone}
+            <span aria-hidden="true">📞</span> {t.call} <span dir="ltr">{phone}</span>
           </a>
         )}
         {!card.national_service && card.lat != null && card.lon != null && (

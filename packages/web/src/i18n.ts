@@ -122,6 +122,10 @@ interface Strings {
   draftNotice: string;
   aboutLink: string;
   apiLink: string;
+  navSearch: string;
+  navDashboard: string;
+  refineSearch: string;
+  filtersTitle: string;
 }
 
 const he: Strings = {
@@ -226,6 +230,10 @@ const he: Strings = {
     'אתר בטיוטה. אינו אתר פעיל, והמידע שבו מוצג לצורכי הדגמה בלבד.',
   aboutLink: 'אודות',
   apiLink: 'למפתחים',
+  navSearch: 'חיפוש',
+  navDashboard: 'ניתוח נתונים',
+  refineSearch: 'חיפוש חדש או מילה נוספת',
+  filtersTitle: 'סינון התוצאות',
 };
 
 const ar: Strings = {
@@ -330,6 +338,10 @@ const ar: Strings = {
     'موقع قيد الإعداد. ليس موقعاً فعّالاً، والمعلومات معروضة للعرض التوضيحي فقط.',
   aboutLink: 'حول',
   apiLink: 'للمطوّرين',
+  navSearch: 'بحث',
+  navDashboard: 'تحليل البيانات',
+  refineSearch: 'بحث جديد أو كلمة إضافية',
+  filtersTitle: 'تصفية النتائج',
 };
 
 const ru: Strings = {
@@ -434,6 +446,10 @@ const ru: Strings = {
     'Черновик сайта. Это не действующий сайт, данные показаны только для демонстрации.',
   aboutLink: 'О проекте',
   apiLink: 'Разработчикам',
+  navSearch: 'Поиск',
+  navDashboard: 'Аналитика',
+  refineSearch: 'Новый поиск или уточнение',
+  filtersTitle: 'Фильтры',
 };
 
 const en: Strings = {
@@ -538,6 +554,10 @@ const en: Strings = {
     'This is a draft. It is not a live service, and the information is shown for demonstration only.',
   aboutLink: 'About',
   apiLink: 'Developers',
+  navSearch: 'Search',
+  navDashboard: 'Data dashboard',
+  refineSearch: 'New search or another word',
+  filtersTitle: 'Filter results',
 };
 
 const TABLE: Record<Lang, Strings> = { he, ar, ru, en };

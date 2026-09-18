@@ -6,6 +6,7 @@ import { DevelopersPage } from './developers.js';
 import { SmartPage } from './smart.js';
 import { detectLang, RTL, stringsFor, type Lang } from './i18n.js';
 import { HomePage, ResultsPage, SavedPage, ServicePage } from './pages.js';
+import { DashboardPage } from './dashboard.js';
 
 function Shell() {
   const location = useLocation();
@@ -37,6 +38,12 @@ function Shell() {
     window.scrollTo(0, 0);
   }, [location.pathname]);
 
+  const path = location.pathname;
+  const section = path.startsWith('/dashboard') ? 'dashboard' : path === '/saved' ? 'saved' : 'search';
+  // Results and the dashboard use the full width on a large screen; reading
+  // pages keep the narrow measure.
+  const wide = path === '/search' || path.startsWith('/dashboard');
+
   const langLink = (path: string) => `${path}${path.includes('?') ? '&' : '?'}lang=${lang}`;
 
   return (
@@ -46,27 +53,37 @@ function Shell() {
       </a>
 
       {/* This is not a live service yet, and a directory of helplines is exactly
-          the kind of page someone would act on in good faith. The stamp says so
-          across every screen; draftNotice in the footer says the same thing to a
-          screen reader, which cannot see it. */}
-      <div className="draftmark" aria-hidden="true">
-        {t.draftMark}
+          the kind of page someone would act on in good faith. The ribbon says so
+          above every screen, in words that both sighted readers and screen
+          readers get — it replaced a stamp over the content, which said the same
+          thing at the cost of making every page harder to read. */}
+      <div className="draftribbon" role="note">
+        <strong>{t.draftMark}</strong> {t.draftNotice}
       </div>
 
       <header className="topbar">
         <div className="topbar-inner">
           <Link className="brand" to={langLink('/')}>
+            <span className="brandmark" aria-hidden="true" />
             {t.siteName}
           </Link>
-          <Link className="iconbtn" to={langLink('/saved')} aria-current={location.pathname === '/saved'}>
-            {t.myFolder}
-            {saved.length > 0 && <span className="badge">{saved.length}</span>}
-          </Link>
+          <nav className="tabs" aria-label={t.siteName}>
+            <Link to={langLink('/')} aria-current={section === 'search' ? 'page' : undefined}>
+              {t.navSearch}
+            </Link>
+            <Link to={langLink('/dashboard')} aria-current={section === 'dashboard' ? 'page' : undefined}>
+              {t.navDashboard}
+            </Link>
+            <Link to={langLink('/saved')} aria-current={section === 'saved' ? 'page' : undefined}>
+              {t.myFolder}
+              {saved.length > 0 && <span className="badge">{saved.length}</span>}
+            </Link>
+          </nav>
           <LangSwitch lang={lang} onChange={setLang} />
         </div>
       </header>
 
-      <main id="main" className="page" tabIndex={-1}>
+      <main id="main" className={wide ? 'page wide' : 'page'} tabIndex={-1}>
         <Routes>
           <Route path="/" element={<HomePage lang={lang} />} />
           <Route path="/search" element={<ResultsPage lang={lang} />} />
@@ -76,11 +93,11 @@ function Shell() {
           <Route path="/deep" element={<SmartPage lang={lang} deep />} />
           <Route path="/accessibility" element={<AccessibilityPage lang={lang} />} />
           <Route path="/developers" element={<DevelopersPage />} />
+          <Route path="/dashboard" element={<DashboardPage lang={lang} />} />
           <Route path="*" element={<HomePage lang={lang} />} />
         </Routes>
 
         <footer className="footer">
-          <p className="draftnotice">{t.draftNotice}</p>
           <p>{t.disclaimer}</p>
           <nav>
             <Link to={langLink('/developers')}>{t.apiLink}</Link>

@@ -131,11 +131,6 @@ export function HomePage({ lang }: { lang: Lang }) {
           </p>
         )}
 
-        {/* The second way in, next to the first rather than on its own page.
-            Someone who cannot name what they need should not have to find a
-            different screen to say so. */}
-        <AskPanel lang={lang} available={modes.smart} />
-
         {suggestions.length > 0 && (
           <ul className="suggestions">
             {suggestions.map((s) => (
@@ -154,13 +149,18 @@ export function HomePage({ lang }: { lang: Lang }) {
 
         <button
           type="button"
-          className="btn secondary block"
+          className="btn secondary block nearme"
           onClick={geo.request}
           disabled={geo.status === 'working'}
         >
           {geo.status === 'working' ? t.nearMeWorking : `📍 ${t.nearMe}`}
         </button>
         {geo.status === 'denied' && <p className="notice">{t.locationDenied}</p>}
+
+        {/* The second way in, next to the first rather than on its own page.
+            Someone who cannot name what they need should not have to find a
+            different screen to say so. */}
+        <AskPanel lang={lang} available={modes.smart} />
       </section>
 
       <UrgentBar lang={lang} />
@@ -168,14 +168,14 @@ export function HomePage({ lang }: { lang: Lang }) {
       <section aria-labelledby="needs-heading">
         <h2 id="needs-heading">{t.commonNeeds}</h2>
         <div className="needs">
-          {NEEDS.map((n) => (
+          {NEEDS.map((n, i) => (
             <button
               key={n.key}
               type="button"
               className="need"
               onClick={() => go(n.response ? { response: n.response } : { situation: n.situation! })}
             >
-              <span className="glyph" aria-hidden="true">
+              <span className="glyph" data-tone={i} aria-hidden="true">
                 {n.glyph}
               </span>
               <span>{t[n.key]}</span>
@@ -269,7 +269,14 @@ export function ResultsPage({ lang }: { lang: Lang }) {
     setParams(next);
   };
 
+  const [refine, setRefine] = useState(q ?? '');
+  useEffect(() => setRefine(q ?? ''), [q]);
+
   const active = new Set([...responses, ...situations]);
+  // Names for the category tags on each card. The facets already carry them
+  // for everything in this result set, so no second lookup is needed.
+  const labels = new Map<string, string>();
+  for (const f of [...facets.responses, ...facets.situations]) if (f.name) labels.set(f.id, f.name);
   // Only the facets that would actually change the result set are worth showing;
   // a filter that keeps everything is noise on a small screen.
   const usefulFacets = [
@@ -282,6 +289,35 @@ export function ResultsPage({ lang }: { lang: Lang }) {
   return (
     <>
       <h1 className="visually-hidden">{t.resultsHeading}</h1>
+
+      <form
+        className="searchform refine"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const next = new URLSearchParams(params);
+          if (refine.trim()) next.set('q', refine.trim());
+          else next.delete('q');
+          setParams(next);
+        }}
+      >
+        <label htmlFor="refine" className="visually-hidden">
+          {t.refineSearch}
+        </label>
+        <input
+          id="refine"
+          type="search"
+          value={refine}
+          onChange={(e) => setRefine(e.target.value)}
+          placeholder={t.refineSearch}
+          autoComplete="off"
+          enterKeyHint="search"
+        />
+        <button type="submit" className="btn">
+          {t.searchAction}
+        </button>
+      </form>
+
       <div className="resultbar">
         <strong>{t.resultsCount(total)}</strong>
         {city && <span>· {city}</span>}
@@ -302,6 +338,10 @@ export function ResultsPage({ lang }: { lang: Lang }) {
         )}
       </div>
 
+      <div className="results-layout">
+      {usefulFacets.length > 0 && (
+      <aside className="filters" aria-label={t.filtersTitle}>
+      <h2 className="filters-title">{t.filtersTitle}</h2>
       {(['response', 'situation'] as const).map((axis) => {
         const group = usefulFacets.filter((f) => f.axis === axis);
         if (group.length === 0) return null;
@@ -328,7 +368,10 @@ export function ResultsPage({ lang }: { lang: Lang }) {
           </div>
         );
       })}
+      </aside>
+      )}
 
+      <div className="results-main">
       {error && <p className="notice">{error}</p>}
 
       {!loading && cards.length === 0 && !error && (
@@ -352,6 +395,7 @@ export function ResultsPage({ lang }: { lang: Lang }) {
             lang={lang}
             saved={saved.includes(card.card_id)}
             onToggleSave={toggleSave}
+            labels={labels}
           />
         ))}
       </ul>
@@ -367,6 +411,8 @@ export function ResultsPage({ lang }: { lang: Lang }) {
           {t.loadMore}
         </button>
       )}
+      </div>
+      </div>
     </>
   );
 }
