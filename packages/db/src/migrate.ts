@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { closePool, getPool } from './pool.js';
+import { closePool, connectDirect } from './pool.js';
 
 /**
  * Migration runner.
@@ -17,8 +17,9 @@ const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'migr
 const LOCK_KEY = 8_421_337;
 
 export async function migrate(): Promise<void> {
-  const pool = getPool();
-  const client = await pool.connect();
+  // A direct connection, not the pool: the advisory lock is session-level and
+  // spans one transaction per migration, so it must stay on one server session.
+  const client = await connectDirect();
   try {
     await client.query('SELECT pg_advisory_lock($1)', [LOCK_KEY]);
     await client.query(`
@@ -52,7 +53,7 @@ export async function migrate(): Promise<void> {
     console.log(`[info] migrations up to date (${files.length} total, ${files.length - applied.size} applied now)`);
   } finally {
     await client.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]).catch(() => {});
-    client.release();
+    await client.end().catch(() => {});
   }
 }
 

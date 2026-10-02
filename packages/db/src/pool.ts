@@ -43,6 +43,27 @@ export function getPool(): pg.Pool {
   return pool;
 }
 
+/**
+ * One unpooled connection to the Postgres server itself, for work that keeps
+ * session state across transactions, such as the migration advisory lock.
+ * DATABASE_URL can go through a transaction-mode pooler, which may run each
+ * transaction on a different server connection; DATABASE_URL_DIRECT never
+ * does. It is unset in local development, where DATABASE_URL is already
+ * direct. The caller ends the client.
+ */
+export async function connectDirect(): Promise<pg.Client> {
+  const connectionString = process.env['DATABASE_URL_DIRECT'] || process.env['DATABASE_URL'];
+  if (!connectionString) throw new Error('DATABASE_URL is not set');
+  const client = new pg.Client({
+    connectionString,
+    connectionTimeoutMillis: 10_000,
+    ssl: sslOption(connectionString),
+  });
+  client.on('error', (err) => console.error('[error] direct postgres client:', err.message));
+  await client.connect();
+  return client;
+}
+
 export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: readonly unknown[] = [],
