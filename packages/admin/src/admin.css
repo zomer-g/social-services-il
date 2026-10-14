@@ -268,3 +268,27 @@ tr.current td { background: var(--surface-2); }
 
 .service { border-top: 1px solid var(--border); padding-top: 0.6rem; margin-top: 0.6rem; }
 .service > p { margin: 0.4rem 0; }
+
+/* Benchmark */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+.panel > summary { cursor: pointer; }
+.panel .inline { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin: 0.75rem 0; }
+.panel fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.4rem 0.75rem; }
+.panel input:not([type='checkbox']), .panel select, .panel textarea {
+  font: inherit;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  box-sizing: border-box;
+}
+.panel textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9rem; }
+label.btn { display: inline-flex; align-items: center; }
+tr.selected td { background: var(--surface-2); }

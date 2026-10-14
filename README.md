@@ -47,6 +47,7 @@ across **17,944 branches**, producing **16,371 cards** in **742 cities**.
 | Importer | Converts the six-table export and pushes it through the public write API |
 | Deduplication | `POST /api/v1/ingest/match` answers "do you already have this", deterministically and with the score broken into its parts, before anything is written |
 | Agreements | A prompt and a pipeline that read contracting agreements, decide whether each describes a service, and either push it or link it to the service already here — with models from Anthropic, OpenAI or Google, and a screen that reads one document with several at once and compares them |
+| Benchmark | Admin tab: a list of queries with their right answers, run in the background through quick, smart and free-language search; every ranked result list kept, scored per interface (top 1/3/10, MRR), downloadable as CSV |
 | Docs | Hebrew developer page at `/developers`, machine contract at `/api/openapi.json` |
 
 Four suites cover it end to end — 129 checks, all passing against production:

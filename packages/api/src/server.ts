@@ -1,6 +1,7 @@
 import { createApp } from './app.js';
 import { bootstrap } from './bootstrap.js';
 import { config } from './config.js';
+import { kickBenchmarks } from './routes/benchmark.js';
 
 const app = createApp();
 
@@ -12,9 +13,13 @@ const server = app.listen(config.port, '0.0.0.0', () => {
 
 // Seeding runs after the socket is open, so a slow first load cannot make the
 // platform's 120-second health check time out and roll the deploy back.
-bootstrap().catch((err: Error) => {
-  console.error('[error] bootstrap failed:', err.stack ?? err.message);
-});
+// After the migrations, so a benchmark interrupted by the last deploy resumes
+// against a schema that has its tables.
+bootstrap()
+  .then(() => kickBenchmarks())
+  .catch((err: Error) => {
+    console.error('[error] bootstrap failed:', err.stack ?? err.message);
+  });
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {

@@ -10,6 +10,7 @@ import { openapi } from './openapi.js';
 import { authRouter } from './auth.js';
 import { adminRouter } from './routes/admin.js';
 import { agreementsRouter } from './routes/agreements.js';
+import { benchmarkRouter } from './routes/benchmark.js';
 import { ingestRouter } from './routes/ingest.js';
 import { deepRouter } from './routes/deep.js';
 import { smartRouter } from './routes/smart.js';
@@ -59,6 +60,7 @@ export function createApp(): Express {
   // Before the admin router: both guard on the same role, and this one needs
   // its own path so the larger body parser above applies to it.
   app.use('/api/admin/agreements', agreementsRouter);
+  app.use('/api/admin/benchmarks', benchmarkRouter);
   app.use('/api/admin', adminRouter);
 
   // MCP lives outside /api/v1 because it is not a REST resource: it is a

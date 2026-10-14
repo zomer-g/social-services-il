@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Agreements } from './Agreements';
+import { Benchmark } from './Benchmark';
 import './admin.css';
 
 /**
@@ -15,13 +16,14 @@ import './admin.css';
  * it is typed in here rather than stored, so it never sits in browser storage.
  */
 
-const TABS = ['overview', 'review', 'agreements', 'reports', 'searches', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
+const TABS = ['overview', 'review', 'agreements', 'benchmark', 'reports', 'searches', 'sources', 'mcp', 'keys', 'people', 'diagnostics'] as const;
 type Tab = (typeof TABS)[number];
 
 const TAB_LABELS: Record<Tab, string> = {
   overview: 'סקירה',
   review: 'ממתין לאישור',
   agreements: 'הסכמים',
+  benchmark: 'בנצ׳מרק',
   reports: 'דיווחי טעויות',
   searches: 'חיפושים',
   sources: 'מקורות',
@@ -49,6 +51,28 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(message);
   }
   return body as T;
+}
+
+/**
+ * Fetches a file with the same credentials as api() and hands it to the browser
+ * to save. A plain link would carry the sign-in cookie but not the bootstrap
+ * token, which lives only in memory.
+ */
+export async function download(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, {
+    credentials: 'include',
+    headers: bootstrapToken ? { authorization: `Bearer ${bootstrapToken}` } : {},
+  });
+  if (!res.ok) throw new Error(`שגיאה ${res.status}`);
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 interface AuthStatus {
@@ -115,6 +139,7 @@ export function App() {
         {tab === 'overview' && <Overview />}
         {tab === 'review' && <Review />}
         {tab === 'agreements' && <Agreements />}
+        {tab === 'benchmark' && <Benchmark />}
         {tab === 'reports' && <Reports />}
         {tab === 'searches' && <Searches />}
         {tab === 'sources' && <Sources />}

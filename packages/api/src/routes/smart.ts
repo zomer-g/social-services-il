@@ -213,6 +213,55 @@ async function handle(req: Request, res: Response, started: number): Promise<voi
     return;
   }
 
+  const result = await runSmartSearch({ q, lat, lon, lang, format, started });
+
+  if (result.declined) {
+    res.status(422).json({
+      error: 'declined',
+      message: 'לא הצלחנו לעבד את הבקשה הזו. אפשר לנסות לנסח אחרת או להשתמש בחיפוש הרגיל.',
+    });
+    return;
+  }
+
+  res.json({
+    answer: result.answer,
+    understood: result.understood,
+    cards: result.cards,
+    tools_used: result.tools_used,
+  });
+}
+
+export interface SmartSearchInput {
+  q: string;
+  lat?: number | undefined;
+  lon?: number | undefined;
+  lang: string;
+  format: 'brief' | 'prose';
+  started: number;
+  /**
+   * Whether to write the search log. Off for the benchmark: sixty queries run
+   * three ways every time someone checks a change would bury what real people
+   * searched for under what the team searched for.
+   */
+  record?: boolean;
+}
+
+export interface SmartSearchResult {
+  declined: boolean;
+  answer: string;
+  understood: Interpretation;
+  cards: unknown[];
+  tools_used: string[];
+}
+
+/**
+ * The search itself, without the request around it — what the route answers
+ * with, and what the benchmark measures. No rate limit here: that belongs to
+ * the public door, not to the search.
+ */
+export async function runSmartSearch(input: SmartSearchInput): Promise<SmartSearchResult> {
+  const { q, lat, lon, lang, format, started } = input;
+  const record = input.record ?? true;
   const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
   const messages: Anthropic.MessageParam[] = [
@@ -247,20 +296,18 @@ async function handle(req: Request, res: Response, started: number): Promise<voi
     });
 
     if (response.stop_reason === 'refusal') {
-      recordSearch({
-        kind: 'smart',
-        outcome: 'declined',
-        query: q,
-        lang,
-        hasLocation: lat !== undefined,
-        toolsUsed: [...new Set(calls)],
-        durationMs: Date.now() - started,
-      });
-      res.status(422).json({
-        error: 'declined',
-        message: 'לא הצלחנו לעבד את הבקשה הזו. אפשר לנסות לנסח אחרת או להשתמש בחיפוש הרגיל.',
-      });
-      return;
+      if (record) {
+        recordSearch({
+          kind: 'smart',
+          outcome: 'declined',
+          query: q,
+          lang,
+          hasLocation: lat !== undefined,
+          toolsUsed: [...new Set(calls)],
+          durationMs: Date.now() - started,
+        });
+      }
+      return { declined: true, answer: '', understood: interpretation, cards: [], tools_used: [...new Set(calls)] };
     }
 
     for (const block of response.content) {
@@ -306,28 +353,31 @@ async function handle(req: Request, res: Response, started: number): Promise<voi
   // Recorded with the answer and the tool calls, not just the count. A smart
   // search that produced a confident paragraph over zero cards reads as a
   // success in every other measure, and it is the failure worth catching.
-  recordSearch({
-    kind: 'smart',
-    outcome: outcomeFor(cards.length),
-    query: q,
-    responseIds: interpretation.responses.map((r) => r.id),
-    situationIds: interpretation.situations.map((s) => s.id),
-    city: interpretation.city ?? null,
-    hasLocation: lat !== undefined,
-    lang,
-    resultCount: cards.length,
-    cardIds: cardIds,
-    answer,
-    toolsUsed: [...new Set(calls)],
-    durationMs: Date.now() - started,
-  });
+  if (record) {
+    recordSearch({
+      kind: 'smart',
+      outcome: outcomeFor(cards.length),
+      query: q,
+      responseIds: interpretation.responses.map((r) => r.id),
+      situationIds: interpretation.situations.map((s) => s.id),
+      city: interpretation.city ?? null,
+      hasLocation: lat !== undefined,
+      lang,
+      resultCount: cards.length,
+      cardIds: cardIds,
+      answer,
+      toolsUsed: [...new Set(calls)],
+      durationMs: Date.now() - started,
+    });
+  }
 
-  res.json({
+  return {
+    declined: false,
     answer: answer.trim(),
     understood: interpretation,
     cards,
     tools_used: [...new Set(calls)],
-  });
+  };
 }
 
 /**
