@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { query, searchCards } from '@ssil/db';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
+import { orderByMention, type MentionCard } from '../mentions.js';
 import { runSmartSearch, smartAvailable } from './smart.js';
 
 /**
@@ -233,7 +234,7 @@ benchmarkRouter.get(
           cell.duration_ms === null ? '' : String(cell.duration_ms),
           cell.error ?? '',
           // Once per cell: the answer belongs to the query, not to each result.
-          first ? (cell.answer ?? '') : '',
+          first ? flatten(cell.answer ?? '') : '',
         ];
         if (cell.hits.length === 0) {
           lines.push([...prefix, '', '', '', '', '', '', '', '', ...tail(true)]);
@@ -390,6 +391,15 @@ function summarise(run: RunRow, byKey: Map<string, CellRow>) {
   });
 }
 
+/**
+ * The written answer on one line, without Markdown emphasis. A cell holding
+ * forty lines turns one spreadsheet row into a screenful; the paragraphs stay
+ * apart with a slash.
+ */
+function flatten(answer: string): string {
+  return answer.replace(/\*\*/g, '').replace(/\s*\n+\s*/g, ' / ').trim();
+}
+
 function csvField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
@@ -431,8 +441,13 @@ async function runCell(q: string, mode: Mode, lang: string): Promise<Outcome> {
     record: false,
   });
   if (result.declined) throw new Error('declined: the model refused this query');
-  const hits = result.cards.map((c) => toHit(c as Record<string, unknown>));
-  return { hits, total: hits.length, answer: result.answer || null };
+  const fetched = result.cards as (MentionCard & Record<string, unknown>)[];
+  // Smart search shows its cards in the order they came back, so that order is
+  // the result. The free-language box shows only prose, so its result is the
+  // services the prose names, in the order it names them; `total` keeps how
+  // many the model had fetched to choose from.
+  const shown = mode === 'free' ? orderByMention(result.answer, fetched) : fetched;
+  return { hits: shown.map(toHit), total: fetched.length, answer: result.answer || null };
 }
 
 let draining = false;
