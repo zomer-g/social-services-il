@@ -5,6 +5,7 @@ import { query } from '@ssil/db';
 import { config } from '../config.js';
 import { CORPUS_INSTRUCTIONS, sharedTools, toolsByName } from '../tools.js';
 import { outcomeFor, recordSearch } from '../searchlog.js';
+import { geminiToolLoop, type ToolLoopResult } from '../gemini.js';
 
 /**
  * Smart search.
@@ -163,17 +164,17 @@ smartRouter.post('/smart-search', (req: Request, res: Response) => {
 });
 
 async function handle(req: Request, res: Response, started: number): Promise<void> {
-  if (!config.anthropicApiKey) {
+  if (!smartAvailable()) {
     recordSearch({
       kind: 'smart',
       outcome: 'unavailable',
       query: typeof (req.body as { q?: unknown })?.q === 'string' ? (req.body as { q: string }).q : null,
-      error: 'ANTHROPIC_API_KEY is not set',
+      error: 'neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set',
       durationMs: Date.now() - started,
     });
     res.status(503).json({
       error: 'smart_search_unavailable',
-      message: 'החיפוש החכם אינו מוגדר בשרת. יש להגדיר ANTHROPIC_API_KEY.',
+      message: 'החיפוש החכם אינו מוגדר בשרת. יש להגדיר ANTHROPIC_API_KEY או GEMINI_API_KEY.',
     });
     return;
   }
@@ -262,88 +263,83 @@ export interface SmartSearchResult {
 export async function runSmartSearch(input: SmartSearchInput): Promise<SmartSearchResult> {
   const { q, lat, lon, lang, format, started } = input;
   const record = input.record ?? true;
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
-  const messages: Anthropic.MessageParam[] = [
-    {
-      role: 'user',
-      content:
-        lat !== undefined && lon !== undefined
-          ? `${q}\n\n(The person's location is lat ${lat}, lon ${lon}. Pass it to the search.)`
-          : q,
-    },
-  ];
+  const userText =
+    lat !== undefined && lon !== undefined
+      ? `${q}
+
+(The person's location is lat ${lat}, lon ${lon}. Pass it to the search.)`
+      : q;
 
   const cardIds: string[] = [];
   const interpretation: Interpretation = { responses: [], situations: [] };
   const calls: string[] = [];
-  let answer = '';
 
-  // A bounded loop rather than an open-ended agent: this is a routing task, and
-  // a public endpoint should not be able to spend unboundedly on one question.
-  for (let turn = 0; turn < 6; turn += 1) {
-    const response = await client.messages.create({
-      model: MODEL,
-      // A written answer carrying four or five addresses and phone numbers
-      // needs more room than a three-sentence caption.
-      max_tokens: format === 'prose' ? 8192 : 4096,
-      // Low effort deliberately: the task is to pick categories and run a
-      // search, and someone waiting on a search page feels every second.
-      output_config: { effort: 'low' },
-      system: systemFor(format),
-      tools: anthropicTools,
-      messages,
+  // One way of running a tool for both providers, so what is collected from
+  // the results cannot depend on which model asked.
+  const callTool = async (name: string, args: Record<string, unknown>) => {
+    calls.push(name);
+    const tool = toolsByName.get(name);
+    if (!tool) return { content: 'Unknown tool', isError: true };
+    try {
+      const out = await tool.handler(args);
+      collect(out, name, args, cardIds, interpretation);
+      return { content: out, isError: false };
+    } catch (err) {
+      return { content: (err as Error).message, isError: true };
+    }
+  };
+
+  const system = systemFor(format);
+  // A written answer carrying four or five addresses and phone numbers needs
+  // more room than a three-sentence caption.
+  const maxOutputTokens = format === 'prose' ? 8192 : 4096;
+  const viaGemini = () =>
+    geminiToolLoop({
+      apiKey: config.geminiApiKey,
+      system,
+      userText,
+      tools: sharedTools,
+      maxTurns: 6,
+      maxOutputTokens,
+      callTool,
     });
 
-    if (response.stop_reason === 'refusal') {
-      if (record) {
-        recordSearch({
-          kind: 'smart',
-          outcome: 'declined',
-          query: q,
-          lang,
-          hasLocation: lat !== undefined,
-          toolsUsed: [...new Set(calls)],
-          durationMs: Date.now() - started,
-        });
-      }
-      return { declined: true, answer: '', understood: interpretation, cards: [], tools_used: [...new Set(calls)] };
+  let loop: ToolLoopResult;
+  if (config.anthropicApiKey && !anthropicRejected) {
+    try {
+      loop = await anthropicToolLoop({ system, userText, maxOutputTokens, callTool });
+    } catch (err) {
+      if (!isKeyRejected(err) || !config.geminiApiKey) throw err;
+      // A rejected key stays rejected until someone sets a new one, and a new
+      // one only arrives with a deploy, which restarts this process. So the
+      // verdict is kept rather than paid for again on every search.
+      anthropicRejected = true;
+      console.warn('[warn] smart search: Anthropic rejected ANTHROPIC_API_KEY; answering with Gemini until the next deploy.');
+      cardIds.length = 0;
+      calls.length = 0;
+      interpretation.responses = [];
+      interpretation.situations = [];
+      loop = await viaGemini();
     }
+  } else {
+    loop = await viaGemini();
+  }
+  const { answer } = loop;
 
-    for (const block of response.content) {
-      if (block.type === 'text') answer += block.text;
+  if (loop.declined) {
+    if (record) {
+      recordSearch({
+        kind: 'smart',
+        outcome: 'declined',
+        query: q,
+        lang,
+        hasLocation: lat !== undefined,
+        toolsUsed: [...new Set(calls)],
+        durationMs: Date.now() - started,
+      });
     }
-
-    if (response.stop_reason !== 'tool_use') break;
-
-    messages.push({ role: 'assistant', content: response.content });
-
-    const results: Anthropic.ToolResultBlockParam[] = [];
-    for (const block of response.content) {
-      if (block.type !== 'tool_use') continue;
-      calls.push(block.name);
-      const tool = toolsByName.get(block.name);
-      if (!tool) {
-        results.push({ type: 'tool_result', tool_use_id: block.id, content: 'Unknown tool', is_error: true });
-        continue;
-      }
-      try {
-        const out = await tool.handler((block.input ?? {}) as Record<string, unknown>);
-        collect(out, block.name, block.input, cardIds, interpretation);
-        results.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(out) });
-      } catch (err) {
-        results.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: (err as Error).message,
-          is_error: true,
-        });
-      }
-    }
-
-    // All results in one user message: splitting them teaches the model to stop
-    // making parallel calls.
-    messages.push({ role: 'user', content: results });
+    return { declined: true, answer: '', understood: interpretation, cards: [], tools_used: [...new Set(calls)] };
   }
 
   // Cards are re-read from the database by id rather than taken from the
@@ -378,6 +374,73 @@ export async function runSmartSearch(input: SmartSearchInput): Promise<SmartSear
     cards,
     tools_used: [...new Set(calls)],
   };
+}
+
+/** Set once Anthropic has rejected the configured key; cleared by the restart a new key needs. */
+let anthropicRejected = false;
+
+/** Whether smart search can answer at all: a working Anthropic key, or a Gemini one. */
+export function smartAvailable(): boolean {
+  return Boolean((config.anthropicApiKey && !anthropicRejected) || config.geminiApiKey);
+}
+
+function isKeyRejected(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  return status === 401 || status === 403;
+}
+
+async function anthropicToolLoop(input: {
+  system: string;
+  userText: string;
+  maxOutputTokens: number;
+  callTool: (name: string, args: Record<string, unknown>) => Promise<{ content: unknown; isError: boolean }>;
+}): Promise<ToolLoopResult> {
+  const client = new Anthropic({ apiKey: config.anthropicApiKey });
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: input.userText }];
+  let answer = '';
+
+  // A bounded loop rather than an open-ended agent: this is a routing task, and
+  // a public endpoint should not be able to spend unboundedly on one question.
+  for (let turn = 0; turn < 6; turn += 1) {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: input.maxOutputTokens,
+      // Low effort deliberately: the task is to pick categories and run a
+      // search, and someone waiting on a search page feels every second.
+      output_config: { effort: 'low' },
+      system: input.system,
+      tools: anthropicTools,
+      messages,
+    });
+
+    if (response.stop_reason === 'refusal') return { declined: true, answer: '' };
+
+    for (const block of response.content) {
+      if (block.type === 'text') answer += block.text;
+    }
+
+    if (response.stop_reason !== 'tool_use') break;
+
+    messages.push({ role: 'assistant', content: response.content });
+
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type !== 'tool_use') continue;
+      const { content, isError } = await input.callTool(block.name, (block.input ?? {}) as Record<string, unknown>);
+      results.push({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+        ...(isError ? { is_error: true } : {}),
+      });
+    }
+
+    // All results in one user message: splitting them teaches the model to stop
+    // making parallel calls.
+    messages.push({ role: 'user', content: results });
+  }
+
+  return { declined: false, answer };
 }
 
 /**
@@ -447,5 +510,5 @@ export async function loadCards(
 
 /** Lets the front end hide the button rather than offer something that 503s. */
 smartRouter.get('/smart-search/status', (_req, res) => {
-  res.set('Cache-Control', 'public, max-age=300').json({ available: Boolean(config.anthropicApiKey) });
+  res.set('Cache-Control', 'public, max-age=300').json({ available: smartAvailable() });
 });

@@ -270,7 +270,7 @@ function NewRun({ smartAvailable, onCreated }: { smartAvailable: boolean; onCrea
         </fieldset>
         {!smartAvailable && modelModes > 0 && (
           <p className="banner">
-            ANTHROPIC_API_KEY אינו מוגדר בשרת, ולכן חיפוש חכם ושפה חופשית יירשמו כשגיאה.
+            לא מוגדר בשרת מפתח תקין ל־Anthropic או ל־Gemini, ולכן חיפוש חכם ושפה חופשית יירשמו כשגיאה.
           </p>
         )}
 
@@ -492,7 +492,16 @@ function RunView({ id, onChanged, onSelect }: { id: string; onChanged: () => voi
 
 function Cell({ cell, judged, expected }: { cell: CellView | null; judged: boolean; expected: string[] }) {
   if (!cell) return <span className="muted">ממתין…</span>;
-  if (cell.error) return <span className="pill bad" title={cell.error}>שגיאה</span>;
+  if (cell.error) {
+    return (
+      <>
+        <span className="pill bad">שגיאה</span>
+        <div className="muted" style={{ fontSize: '0.8rem', overflowWrap: 'anywhere' }}>
+          {cell.error.slice(0, 200)}
+        </div>
+      </>
+    );
+  }
   return (
     <>
       {judged &&

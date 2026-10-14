@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { query, searchCards } from '@ssil/db';
 import { requireRole } from '../auth.js';
 import { config } from '../config.js';
-import { runSmartSearch } from './smart.js';
+import { runSmartSearch, smartAvailable } from './smart.js';
 
 /**
  * The benchmark: a fixed list of queries put to every search interface the
@@ -144,7 +144,7 @@ benchmarkRouter.get(
         ORDER BY r.created_at DESC
         LIMIT 100`,
     );
-    res.json({ runs: rows, smart_available: Boolean(config.anthropicApiKey) });
+    res.json({ runs: rows, smart_available: smartAvailable() });
   }),
 );
 
@@ -422,7 +422,7 @@ async function runCell(q: string, mode: Mode, lang: string): Promise<Outcome> {
       answer: null,
     };
   }
-  if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY is not set');
+  if (!smartAvailable()) throw new Error('neither ANTHROPIC_API_KEY nor GEMINI_API_KEY is set');
   const result = await runSmartSearch({
     q,
     lang,

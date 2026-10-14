@@ -15,6 +15,8 @@ export const config = {
   publicUrl: process.env['PUBLIC_URL'] ?? '',
   /** Optional: enables LLM query understanding and tag suggestions. */
   anthropicApiKey: process.env['ANTHROPIC_API_KEY'] ?? '',
+  /** Optional: answers smart search when there is no working Anthropic key. */
+  geminiApiKey: process.env['GEMINI_API_KEY'] || process.env['GOOGLE_API_KEY'] || '',
   required,
 } as const;
 
